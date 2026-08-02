@@ -1,0 +1,77 @@
+name: Build executáveis
+
+# Gera os instaladores/pacotes para Windows, Linux e macOS.
+# - Rode manualmente pela aba Actions (workflow_dispatch), ou
+# - Faça push de uma tag "v*" (ex.: v0.1.0) para também publicar um Release.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux
+          - os: windows-latest
+            name: windows
+          - os: macos-latest
+            name: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # rpm/fakeroot são necessários para os makers .rpm e .deb no Linux.
+      - name: Dependências de empacotamento (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y rpm fakeroot
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Gerar distribuíveis
+        run: npm run make
+
+      - name: Publicar artefatos
+        uses: actions/upload-artifact@v4
+        with:
+          name: sts-${{ matrix.name }}
+          path: out/make/**/*
+          if-no-files-found: error
+
+  release:
+    name: Publicar Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Baixar todos os artefatos
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Criar GitHub Release com os binários
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=$(find artifacts -type f)
+          echo "Anexando:"; echo "$files"
+          gh release create "${GITHUB_REF_NAME}" $files \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "STS ${GITHUB_REF_NAME}" \
+            --generate-notes

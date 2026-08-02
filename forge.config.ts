@@ -15,8 +15,18 @@ const config: ForgeConfig = {
   makers: [
     new MakerSquirrel({}),
     new MakerZIP({}, ['darwin']),
-    new MakerRpm({}),
-    new MakerDeb({}),
+    new MakerRpm({
+      options: {
+        homepage: 'https://github.com/felipemarts/sts',
+        license: 'MIT',
+      },
+    }),
+    new MakerDeb({
+      options: {
+        maintainer: 'felipemarts',
+        homepage: 'https://github.com/felipemarts/sts',
+      },
+    }),
   ],
   plugins: [
     new VitePlugin({
