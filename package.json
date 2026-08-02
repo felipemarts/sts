@@ -1,0 +1,54 @@
+{
+  "name": "sts",
+  "productName": "STS",
+  "version": "0.1.0",
+  "description": "Speech-to-text e text-to-speech 100% local (Whisper + Piper), com gerenciamento de modelos.",
+  "main": ".vite/build/main.js",
+  "private": true,
+  "license": "MIT",
+  "author": "felipemarts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/felipemarts/sts.git"
+  },
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "publish": "electron-forge publish",
+    "lint": "eslint --ext .ts,.tsx ."
+  },
+  "keywords": [
+    "electron",
+    "whisper",
+    "piper",
+    "speech-to-text",
+    "text-to-speech",
+    "stt",
+    "tts",
+    "offline"
+  ],
+  "devDependencies": {
+    "@electron-forge/cli": "^7.11.2",
+    "@electron-forge/maker-deb": "^7.11.2",
+    "@electron-forge/maker-rpm": "^7.11.2",
+    "@electron-forge/maker-squirrel": "^7.11.2",
+    "@electron-forge/maker-zip": "^7.11.2",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
+    "@electron-forge/plugin-fuses": "^7.11.2",
+    "@electron-forge/plugin-vite": "^7.11.2",
+    "@electron/fuses": "^1.8.0",
+    "@types/electron-squirrel-startup": "^1.0.2",
+    "@types/node": "^20.14.0",
+    "@typescript-eslint/eslint-plugin": "^8.8.0",
+    "@typescript-eslint/parser": "^8.8.0",
+    "electron": "43.2.0",
+    "eslint": "^8.57.1",
+    "eslint-plugin-import": "^2.32.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.21"
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "^1.0.1"
+  }
+}
