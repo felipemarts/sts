@@ -51,3 +51,34 @@ export function settingsFile(): string {
 export function tmpDir(): string {
   return ensureDir(path.join(userDataDir(), 'tmp'));
 }
+
+// --- Modo de clonagem de voz (venv Python 3.11 pesado + cache de modelos) ---
+
+export function cloneDir(): string {
+  return ensureDir(path.join(userDataDir(), 'clone'));
+}
+
+export function cloneVenvDir(): string {
+  return path.join(cloneDir(), 'venv');
+}
+
+export function cloneVenvPython(): string {
+  return process.platform === 'win32'
+    ? path.join(cloneVenvDir(), 'Scripts', 'python.exe')
+    : path.join(cloneVenvDir(), 'bin', 'python');
+}
+
+/** WAV de referência atual da clonagem (a amostra gravada pelo microfone). */
+export function cloneRefPath(): string {
+  return path.join(cloneDir(), 'reference.wav');
+}
+
+/** Cache do HuggingFace para os modelos de clonagem (fora de ~/.cache). */
+export function hfCacheDir(): string {
+  return ensureDir(path.join(cloneDir(), 'hf-cache'));
+}
+
+/** Script do worker Python de clonagem, escrito em runtime. */
+export function cloneWorkerPath(): string {
+  return path.join(cloneDir(), 'clone_worker.py');
+}

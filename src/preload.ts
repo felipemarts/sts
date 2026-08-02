@@ -34,6 +34,15 @@ const api: StsApi = {
     export: (text, voiceId, rate) =>
       ipcRenderer.invoke(IPC.ttsExport, text, voiceId, rate),
   },
+  clone: {
+    ensure: () => ipcRenderer.invoke(IPC.cloneEnsure),
+    setup: () => ipcRenderer.invoke(IPC.cloneSetup),
+    onSetupProgress: (cb) => subscribe<SetupProgress>(IPC.cloneSetupProgress, cb),
+    saveReference: (pcm, sampleRate) =>
+      ipcRenderer.invoke(IPC.cloneSaveReference, pcm, sampleRate),
+    synth: (text, language) => ipcRenderer.invoke(IPC.cloneSynth, text, language),
+    export: (text, language) => ipcRenderer.invoke(IPC.cloneExport, text, language),
+  },
   engines: {
     status: () => ipcRenderer.invoke(IPC.enginesStatus),
   },

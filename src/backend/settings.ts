@@ -12,6 +12,8 @@ const DEFAULTS: Settings = {
   ttsVolume: 1.0,
   vadThreshold: 0.015,
   vadHangoverMs: 700,
+  cloneLanguage: 'pt',
+  cloneRefPath: null,
 };
 
 let cache: Settings | null = null;

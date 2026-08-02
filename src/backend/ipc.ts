@@ -1,12 +1,14 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron';
+import fs from 'node:fs';
 import {
   EngineStatus,
   IPC,
   ModelKind,
   Settings,
 } from '../shared/types';
-import { ExportResult } from '../shared/api';
+import { ExportResult, CloneEnsure } from '../shared/api';
 import { writeAudio } from './audioExport';
+import { encodeWav } from './util';
 import { getSettings, setSettings } from './settings';
 import { getCatalog, findWhisper, findVoice } from './models/catalog';
 import {
@@ -17,8 +19,18 @@ import {
 } from './models/manager';
 import { transcribe, stopServer, whisperStatus } from './engines/whisper';
 import { synth } from './engines/piper';
-import { setupPiperEnv, systemPython, venvReady, piperInstalled } from './pythonEnv';
-import { venvPython } from './paths';
+import { synthClone } from './engines/voiceClone';
+import {
+  setupPiperEnv,
+  systemPython,
+  venvReady,
+  piperInstalled,
+  setupCloneEnv,
+  python311,
+  cloneVenvReady,
+  chatterboxInstalled,
+} from './pythonEnv';
+import { venvPython, cloneRefPath } from './paths';
 
 export function registerIpc(): void {
   ipcMain.handle(IPC.settingsGet, () => getSettings());
@@ -76,6 +88,51 @@ export function registerIpc(): void {
       });
       if (canceled || !filePath) return { canceled: true };
       const wav = await synth(text, voiceId, { rate });
+      await writeAudio(wav, filePath);
+      return { canceled: false, path: filePath };
+    },
+  );
+
+  // ----------------------------- Clonagem de voz -----------------------------
+
+  ipcMain.handle(IPC.cloneEnsure, async (): Promise<CloneEnsure> => ({
+    python311: python311(),
+    venvReady: cloneVenvReady(),
+    installed: await chatterboxInstalled(),
+    hasReference: fs.existsSync(cloneRefPath()),
+  }));
+
+  ipcMain.handle(IPC.cloneSetup, () => setupCloneEnv());
+
+  ipcMain.handle(
+    IPC.cloneSaveReference,
+    (_e, pcm: ArrayBuffer, sampleRate: number): string => {
+      const wav = encodeWav(new Float32Array(pcm), sampleRate);
+      const dest = cloneRefPath();
+      fs.writeFileSync(dest, wav);
+      setSettings({ cloneRefPath: dest });
+      return dest;
+    },
+  );
+
+  ipcMain.handle(IPC.cloneSynth, async (_e, text: string, language: string) => {
+    return synthClone(text, language); // vira Uint8Array no renderer
+  });
+
+  ipcMain.handle(
+    IPC.cloneExport,
+    async (e, text: string, language: string): Promise<ExportResult> => {
+      const win = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+      const { canceled, filePath } = await dialog.showSaveDialog(win!, {
+        title: 'Salvar áudio (voz clonada)',
+        defaultPath: 'voz-clonada.mp3',
+        filters: [
+          { name: 'MP3', extensions: ['mp3'] },
+          { name: 'WAV', extensions: ['wav'] },
+        ],
+      });
+      if (canceled || !filePath) return { canceled: true };
+      const wav = await synthClone(text, language);
       await writeAudio(wav, filePath);
       return { canceled: false, path: filePath };
     },

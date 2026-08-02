@@ -3,6 +3,12 @@ import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { registerIpc } from './backend/ipc';
 import { stopServer } from './backend/engines/whisper';
+import { stopWorker } from './backend/engines/voiceClone';
+
+function stopEngines() {
+  stopServer();
+  stopWorker();
+}
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {
@@ -51,13 +57,13 @@ app.on('ready', () => {
 });
 
 app.on('window-all-closed', () => {
-  stopServer();
+  stopEngines();
   if (process.platform !== 'darwin') {
     app.quit();
   }
 });
 
-app.on('before-quit', () => stopServer());
+app.on('before-quit', () => stopEngines());
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {

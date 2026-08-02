@@ -53,6 +53,8 @@ export interface Settings {
   ttsVolume: number; // 0..1 (ganho no playback)
   vadThreshold: number; // limiar de energia RMS (0..1)
   vadHangoverMs: number; // silêncio para encerrar um segmento de fala
+  cloneLanguage: string; // idioma da síntese clonada (ex.: "pt")
+  cloneRefPath: string | null; // WAV de referência atual (amostra gravada)
 }
 
 export interface EngineStatus {
@@ -92,5 +94,11 @@ export const IPC = {
   piperSetupProgress: 'piper:setup:progress', // evento main -> renderer
   piperSynth: 'piper:synth',
   ttsExport: 'tts:export',
+  cloneEnsure: 'clone:ensure',
+  cloneSetup: 'clone:setup',
+  cloneSetupProgress: 'clone:setup:progress', // evento main -> renderer
+  cloneSaveReference: 'clone:saveReference',
+  cloneSynth: 'clone:synth',
+  cloneExport: 'clone:export',
   enginesStatus: 'engines:status',
 } as const;

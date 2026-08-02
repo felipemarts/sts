@@ -7,6 +7,9 @@ App desktop (Electron) com **transcrição de fala** e **leitura de texto** roda
   usando **Whisper** ([whisper.cpp](https://github.com/ggml-org/whisper.cpp)).
 - 🔊 **Ler** — sintetiza texto em voz neural com **[Piper](https://github.com/OHF-Voice/piper1-gpl)**,
   com controle de velocidade e volume, e **exporta o áudio em MP3 ou WAV**.
+- 🧬 **Clonar** — grava uma amostra da sua voz e sintetiza qualquer texto com ela,
+  usando **[Chatterbox](https://github.com/resemble-ai/chatterbox)** (licença MIT).
+  Recurso avançado e mais pesado (ver abaixo).
 - ⚙ **Gerenciador de modelos** — baixa, guarda e remove modelos Whisper e vozes
   Piper (vários idiomas) pela própria interface.
 
@@ -24,6 +27,9 @@ App desktop (Electron) com **transcrição de fala** e **leitura de texto** roda
   ao clicar em **Instalar Piper**)
 - **ffmpeg** (opcional, só para exportar em **MP3** — WAV não precisa)
   - macOS: `brew install ffmpeg`
+- **Python 3.11** (opcional, só para a **Clonagem de voz**)
+  - macOS: `brew install python@3.11`
+  - O app cria um _venv_ separado e instala o `chatterbox-tts` (+ PyTorch, ~2–3 GB)
 
 ## Rodando em desenvolvimento
 
@@ -41,6 +47,25 @@ npm start
    (ex.: _Português BR — Faber_).
 4. Selecione o **modelo de transcrição ativo** e permita o **microfone**.
 5. Vá para **Escutar** e clique em **Iniciar captura**, ou para **Ler** e digite um texto.
+
+## Clonagem de voz (avançado)
+
+A aba **Clonar** usa o [Chatterbox](https://github.com/resemble-ai/chatterbox) (MIT)
+para clonagem _zero-shot_: sintetiza texto imitando o timbre de uma amostra curta.
+
+1. Instale o **Python 3.11** (`brew install python@3.11`).
+2. Na aba **Clonar**, clique em **Instalar clonagem** — cria um _venv_ separado e
+   baixa `chatterbox-tts` + PyTorch (~2–3 GB). O modelo (~1 GB) é baixado do
+   HuggingFace no primeiro uso.
+3. **Grave ~10s** da voz (fale naturalmente, sem ruído de fundo).
+4. Escolha o idioma, digite o texto e clique em **Ler com voz clonada** ou **Salvar…**.
+
+> **Desempenho:** roda em **CPU** por padrão (em Apple Silicon o MPS ficou ~8x
+> mais lento por _fallback_). Espere ~30s para carregar o modelo (uma vez por
+> sessão) e **~1–2 min por frase**. Dá para experimentar `STS_CLONE_DEVICE=mps`.
+>
+> Tudo (venv, cache de modelos, amostra) fica em `userData`, fora do repositório.
+> Os pesos do Chatterbox são MIT.
 
 ## Empacotando
 

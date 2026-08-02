@@ -19,6 +19,13 @@ export interface ExportResult {
   path?: string;
 }
 
+export interface CloneEnsure {
+  python311: string | null; // caminho do Python 3.11 encontrado (ou null)
+  venvReady: boolean;
+  installed: boolean; // chatterbox importável no venv
+  hasReference: boolean; // já existe uma amostra de referência salva
+}
+
 /** Superfície exposta ao renderer via contextBridge (window.sts). */
 export interface StsApi {
   settings: {
@@ -42,6 +49,14 @@ export interface StsApi {
     onSetupProgress(cb: (p: SetupProgress) => void): () => void;
     synth(text: string, voiceId: string, rate: number): Promise<Uint8Array>;
     export(text: string, voiceId: string, rate: number): Promise<ExportResult>;
+  };
+  clone: {
+    ensure(): Promise<CloneEnsure>;
+    setup(): Promise<void>;
+    onSetupProgress(cb: (p: SetupProgress) => void): () => void;
+    saveReference(pcm: ArrayBuffer, sampleRate: number): Promise<string>;
+    synth(text: string, language: string): Promise<Uint8Array>;
+    export(text: string, language: string): Promise<ExportResult>;
   };
   engines: {
     status(): Promise<EngineStatus>;

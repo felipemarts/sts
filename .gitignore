@@ -98,5 +98,6 @@ out/
 /models/
 /python/
 /venv/
+/clone/
 *.wav
 scratchpad/
