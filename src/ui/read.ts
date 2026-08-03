@@ -1,5 +1,6 @@
 import { el } from './dom';
 import { Tab } from './listen';
+import { EdgeVoice, TtsEngine } from '../shared/types';
 
 /** Quebra em frases agrupando até ~300 caracteres (para blocos longos). */
 function splitSentences(text: string): string[] {
@@ -32,6 +33,13 @@ export function createReadTab(goToSettings: () => void): Tab {
   const textarea = el('textarea', {
     placeholder: 'Digite ou cole o texto que você quer ouvir…',
   }) as HTMLTextAreaElement;
+  const engineSelect = el('select', {}, []) as HTMLSelectElement;
+  for (const [v, l] of [
+    ['edge', 'Neural (Edge · online)'],
+    ['piper', 'Local (Piper)'],
+  ]) {
+    engineSelect.append(el('option', { value: v }, [l]));
+  }
   const voiceSelect = el('select', {}, []) as HTMLSelectElement;
   const rate = el('input', {
     type: 'range', min: '0.5', max: '2', step: '0.05', value: '1',
@@ -42,6 +50,7 @@ export function createReadTab(goToSettings: () => void): Tab {
   const rateVal = el('span', { class: 'value' }, ['1.00×']);
   const volVal = el('span', { class: 'value' }, ['100%']);
   const playBtn = el('button', { class: 'primary' }, ['▶  Ler']) as HTMLButtonElement;
+  const pauseBtn = el('button', { class: 'ghost' }, ['⏸  Pausar']) as HTMLButtonElement;
   const stopBtn = el('button', { class: 'ghost' }, ['⏹  Parar']) as HTMLButtonElement;
   const saveBtn = el('button', {}, ['💾  Salvar…']) as HTMLButtonElement;
   const statusPill = el('span', { class: 'pill' }, ['—']);
@@ -60,11 +69,31 @@ export function createReadTab(goToSettings: () => void): Tab {
   let paraEls: HTMLElement[] = [];
   let runId = 0;
   let playing = false;
+  let paused = false;
+  let edgeVoices: EdgeVoice[] = [];
+
+  const engine = (): TtsEngine => (engineSelect.value as TtsEngine) || 'edge';
 
   const updateButtons = () => {
     playBtn.disabled = playing;
-    playBtn.textContent = playing ? '🔊  Lendo…' : '▶  Ler';
+    playBtn.textContent = playing ? (paused ? '⏸  Pausado' : '🔊  Lendo…') : '▶  Ler';
     stopBtn.disabled = !playing;
+    pauseBtn.disabled = !playing;
+    pauseBtn.textContent = paused ? '▶  Retomar' : '⏸  Pausar';
+  };
+
+  // Pausa/retoma no ponto exato: suspender o AudioContext congela o relógio de
+  // áudio (o buffer em reprodução para) e resume() continua de onde parou.
+  const togglePause = async () => {
+    if (!playing || !ctx) return;
+    if (paused) {
+      await ctx.resume();
+      paused = false;
+    } else {
+      await ctx.suspend();
+      paused = true;
+    }
+    updateButtons();
   };
 
   const stopCurrentSource = () => {
@@ -118,22 +147,24 @@ export function createReadTab(goToSettings: () => void): Tab {
     const myRun = ++runId; // invalida qualquer leitura anterior
     stopCurrentSource();
     playing = true;
+    paused = false;
     errorBox.textContent = '';
     updateButtons();
 
     if (!ctx) ctx = new AudioContext();
     await ctx.resume();
 
+    const eng = engine();
     const voice = voiceSelect.value;
     const r = parseFloat(rate.value);
-    const synth = (i: number) => window.sts.piper.synth(chunks[i], voice, r);
+    const synth = (i: number) => window.sts.tts.synth(chunks[i], eng, voice, r);
     let nextP: Promise<Uint8Array> | null = null;
 
     for (let i = startIndex; i < chunks.length; i++) {
       if (myRun !== runId) return;
-      let wav: Uint8Array;
+      let audio: Uint8Array;
       try {
-        wav = await (nextP ?? synth(i));
+        audio = await (nextP ?? synth(i));
       } catch (err) {
         if (myRun === runId) errorBox.textContent = err instanceof Error ? err.message : String(err);
         break;
@@ -143,7 +174,7 @@ export function createReadTab(goToSettings: () => void): Tab {
 
       let audioBuffer: AudioBuffer;
       try {
-        audioBuffer = await ctx.decodeAudioData(wav.slice().buffer);
+        audioBuffer = await ctx.decodeAudioData(audio.slice().buffer);
       } catch (err) {
         if (myRun === runId) errorBox.textContent = err instanceof Error ? err.message : String(err);
         break;
@@ -164,29 +195,37 @@ export function createReadTab(goToSettings: () => void): Tab {
 
   const stopAll = () => {
     runId++; // encerra o loop em andamento
+    // Se estava pausado, retoma o contexto para o stop() da fonte fazer efeito.
+    if (ctx && ctx.state === 'suspended') ctx.resume();
+    paused = false;
     stopCurrentSource();
     playing = false;
     clearActive();
     updateButtons();
   };
 
-  // Valida texto/voz/engine. Retorna o texto ou null.
+  // Valida texto/voz/motor. Retorna o texto ou null.
   const ensureReady = async (): Promise<string | null> => {
     errorBox.textContent = '';
     saveStatus.textContent = '';
     const text = textarea.value.trim();
     if (!text) return null;
     if (!voiceSelect.value) {
-      errorBox.textContent = 'Baixe uma voz em Configurações antes.';
-      goToSettings();
+      errorBox.textContent =
+        engine() === 'piper'
+          ? 'Baixe uma voz Piper em Configurações antes.'
+          : 'Nenhuma voz disponível.';
+      if (engine() === 'piper') goToSettings();
       return null;
     }
-    const ensured = await window.sts.piper.ensure();
-    if (!ensured.piperInstalled) {
-      errorBox.textContent =
-        'O motor Piper ainda não foi instalado. Vá em Configurações e clique em "Instalar Piper".';
-      goToSettings();
-      return null;
+    if (engine() === 'piper') {
+      const ensured = await window.sts.piper.ensure();
+      if (!ensured.piperInstalled) {
+        errorBox.textContent =
+          'O motor Piper ainda não foi instalado. Vá em Configurações e clique em "Instalar Piper".';
+        goToSettings();
+        return null;
+      }
     }
     return text;
   };
@@ -206,7 +245,7 @@ export function createReadTab(goToSettings: () => void): Tab {
     saveBtn.disabled = true;
     saveBtn.textContent = '⏳  Salvando…';
     try {
-      const res = await window.sts.piper.export(text, voiceSelect.value, parseFloat(rate.value));
+      const res = await window.sts.tts.export(text, engine(), voiceSelect.value, parseFloat(rate.value));
       if (!res.canceled && res.path) saveStatus.textContent = `✓ Salvo em: ${res.path}`;
     } catch (err) {
       errorBox.textContent = err instanceof Error ? err.message : String(err);
@@ -215,6 +254,53 @@ export function createReadTab(goToSettings: () => void): Tab {
       saveBtn.textContent = '💾  Salvar…';
     }
   };
+
+  // ------- Popular vozes conforme o motor -------
+  async function fillVoices() {
+    const s = await window.sts.settings.get();
+    voiceSelect.innerHTML = '';
+    if (engine() === 'edge') {
+      if (!edgeVoices.length) {
+        try {
+          edgeVoices = await window.sts.tts.voices();
+        } catch {
+          edgeVoices = [];
+        }
+      }
+      if (!edgeVoices.length) {
+        voiceSelect.append(el('option', { value: '' }, ['(sem conexão para listar vozes)']));
+        statusPill.textContent = 'Edge · offline?';
+        statusPill.className = 'pill bad';
+      } else {
+        for (const v of edgeVoices) {
+          voiceSelect.append(el('option', { value: v.shortName }, [v.friendlyName]));
+        }
+        const want = s.edgeVoice && edgeVoices.some((v) => v.shortName === s.edgeVoice)
+          ? s.edgeVoice
+          : edgeVoices.find((v) => v.locale === 'pt-BR')?.shortName ?? edgeVoices[0].shortName;
+        voiceSelect.value = want;
+        if (!s.edgeVoice) window.sts.settings.set({ edgeVoice: want });
+        statusPill.textContent = `${edgeVoices.length} vozes neurais`;
+        statusPill.className = 'pill ok';
+      }
+    } else {
+      const cat = await window.sts.catalog();
+      const status = await window.sts.models.status();
+      const installed = cat.piper.filter((v) => status[v.id]);
+      if (!installed.length) {
+        voiceSelect.append(el('option', { value: '' }, ['(baixe uma voz Piper em Configurações)']));
+        statusPill.textContent = 'Sem vozes Piper';
+        statusPill.className = 'pill bad';
+      } else {
+        for (const v of installed) voiceSelect.append(el('option', { value: v.id }, [v.label]));
+        if (s.piperVoice && installed.some((v) => v.id === s.piperVoice)) {
+          voiceSelect.value = s.piperVoice;
+        }
+        statusPill.textContent = `${installed.length} voz(es) Piper`;
+        statusPill.className = 'pill ok';
+      }
+    }
+  }
 
   rate.addEventListener('input', () => {
     rateVal.textContent = `${parseFloat(rate.value).toFixed(2)}×`;
@@ -230,27 +316,34 @@ export function createReadTab(goToSettings: () => void): Tab {
   volume.addEventListener('change', () =>
     window.sts.settings.set({ ttsVolume: parseFloat(volume.value) }),
   );
-  voiceSelect.addEventListener('change', () =>
-    window.sts.settings.set({ piperVoice: voiceSelect.value }),
-  );
+  engineSelect.addEventListener('change', async () => {
+    await window.sts.settings.set({ ttsEngine: engine() });
+    await fillVoices();
+  });
+  voiceSelect.addEventListener('change', () => {
+    if (engine() === 'edge') window.sts.settings.set({ edgeVoice: voiceSelect.value });
+    else window.sts.settings.set({ piperVoice: voiceSelect.value });
+  });
   playBtn.addEventListener('click', play);
+  pauseBtn.addEventListener('click', togglePause);
   stopBtn.addEventListener('click', stopAll);
   saveBtn.addEventListener('click', save);
 
   const element = el('div', { class: 'panel', id: 'panel-read' }, [
     el('h2', {}, ['Ler']),
     el('p', { class: 'sub' }, [
-      'Digite um texto e ouça a leitura com voz neural local (Piper). Textos longos começam a tocar já no 1º parágrafo.',
+      'Digite um texto e ouça a leitura com voz neural. O motor "Neural (Edge)" funciona na hora (online, sem instalação); o "Local (Piper)" roda 100% offline após instalar em Configurações.',
     ]),
     el('div', { class: 'card' }, [textarea]),
     el('div', { class: 'card' }, [
       el('div', { class: 'row' }, [
+        el('label', { class: 'field' }, ['Motor', engineSelect]),
         el('label', { class: 'field', style: 'flex:2' }, ['Voz', voiceSelect]),
         el('label', { class: 'field' }, [el('span', {}, ['Velocidade ', rateVal]), rate]),
         el('label', { class: 'field' }, [el('span', {}, ['Volume ', volVal]), volume]),
       ]),
       el('div', { class: 'row' }, [
-        playBtn, stopBtn, saveBtn, el('span', { style: 'flex:1' }), statusPill,
+        playBtn, pauseBtn, stopBtn, saveBtn, el('span', { style: 'flex:1' }), statusPill,
       ]),
       saveStatus,
     ]),
@@ -260,24 +353,8 @@ export function createReadTab(goToSettings: () => void): Tab {
 
   const refresh = async () => {
     const s = await window.sts.settings.get();
-    const cat = await window.sts.catalog();
-    const status = await window.sts.models.status();
-
-    voiceSelect.innerHTML = '';
-    const installed = cat.piper.filter((v) => status[v.id]);
-    if (installed.length === 0) {
-      voiceSelect.append(el('option', { value: '' }, ['(nenhuma voz baixada)']));
-      statusPill.textContent = 'Sem vozes';
-      statusPill.className = 'pill bad';
-    } else {
-      for (const v of installed) voiceSelect.append(el('option', { value: v.id }, [v.label]));
-      if (s.piperVoice && installed.some((v) => v.id === s.piperVoice)) {
-        voiceSelect.value = s.piperVoice;
-      }
-      statusPill.textContent = `${installed.length} voz(es) disponível(is)`;
-      statusPill.className = 'pill ok';
-    }
-
+    engineSelect.value = s.ttsEngine;
+    await fillVoices();
     rate.value = String(s.ttsRate);
     rateVal.textContent = `${s.ttsRate.toFixed(2)}×`;
     volume.value = String(s.ttsVolume);

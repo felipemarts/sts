@@ -17,10 +17,30 @@ export function createSettingsTab(onModelsChanged: () => void): Tab {
   // ---- Engines ----
   const whisperPill = el('span', { class: 'pill' }, ['—']);
   const whisperHint = el('div', { class: 'hint' });
+  const installWhisperBtn = el('button', {}, ['Instalar Whisper']) as HTMLButtonElement;
+  const whisperLog = el('div', { class: 'hint', style: 'margin-top:8px' });
   const piperPill = el('span', { class: 'pill' }, ['—']);
   const piperHint = el('div', { class: 'hint' });
   const installPiperBtn = el('button', {}, ['Instalar Piper']) as HTMLButtonElement;
   const piperLog = el('div', { class: 'hint', style: 'margin-top:8px' });
+
+  installWhisperBtn.addEventListener('click', async () => {
+    installWhisperBtn.disabled = true;
+    whisperLog.textContent = 'Iniciando…';
+    try {
+      await window.sts.whisper.setup();
+    } catch (err) {
+      whisperLog.textContent = err instanceof Error ? err.message : String(err);
+    } finally {
+      installWhisperBtn.disabled = false;
+      refreshEngines();
+    }
+  });
+
+  window.sts.whisper.onSetupProgress((p) => {
+    whisperLog.textContent = p.message;
+    if (p.done && !p.error) refreshEngines();
+  });
 
   installPiperBtn.addEventListener('click', async () => {
     installPiperBtn.disabled = true;
@@ -139,14 +159,21 @@ export function createSettingsTab(onModelsChanged: () => void): Tab {
   async function refreshEngines() {
     const st = await window.sts.engines.status();
     if (st.whisper.available) {
-      whisperPill.textContent = 'whisper.cpp encontrado';
+      whisperPill.textContent = 'whisper.cpp pronto';
       whisperPill.className = 'pill ok';
       whisperHint.textContent = st.whisper.binaryPath ?? '';
+      installWhisperBtn.style.display = 'none';
+    } else if (st.whisper.canAutoInstall) {
+      whisperPill.textContent = 'whisper.cpp não instalado';
+      whisperPill.className = 'pill bad';
+      whisperHint.textContent = 'Baixa o binário do whisper.cpp (~30 MB) — uma vez só, sem instalar nada no sistema.';
+      installWhisperBtn.style.display = '';
     } else {
       whisperPill.textContent = 'whisper.cpp não encontrado';
       whisperPill.className = 'pill bad';
       whisperHint.textContent =
-        'Instale com: brew install whisper-cpp  (ou defina o caminho do binário whisper-server).';
+        'No macOS instale com: brew install whisper-cpp  (ou defina o caminho do binário nas Configurações).';
+      installWhisperBtn.style.display = 'none';
     }
 
     const ensured = await window.sts.piper.ensure();
@@ -155,15 +182,12 @@ export function createSettingsTab(onModelsChanged: () => void): Tab {
       piperPill.className = 'pill ok';
       piperHint.textContent = '';
       installPiperBtn.style.display = 'none';
-    } else if (!ensured.systemPython) {
-      piperPill.textContent = 'Python 3 não encontrado';
-      piperPill.className = 'pill bad';
-      piperHint.textContent = 'Instale o Python 3 (ex.: brew install python) para usar o Piper.';
-      installPiperBtn.style.display = 'none';
     } else {
       piperPill.textContent = 'Piper não instalado';
       piperPill.className = 'pill bad';
-      piperHint.textContent = 'Cria um venv isolado e instala o piper-tts (~35 MB).';
+      piperHint.textContent = ensured.pythonRuntimeReady
+        ? 'Cria um venv e instala o piper-tts (~35 MB).'
+        : 'Baixa um Python 3.11 embutido (~30 MB) + o piper-tts. Não precisa de Python no sistema.';
       installPiperBtn.style.display = '';
     }
   }
@@ -227,14 +251,18 @@ export function createSettingsTab(onModelsChanged: () => void): Tab {
 
     el('div', { class: 'card' }, [
       el('h3', {}, ['Motores']),
-      el('div', { class: 'row' }, [el('span', {}, ['Transcrição (STT):']), whisperPill]),
+      el('div', { class: 'row' }, [el('span', {}, ['Transcrição (STT):']), whisperPill, installWhisperBtn]),
       whisperHint,
+      whisperLog,
       el('div', { class: 'row', style: 'margin-top:12px' }, [
-        el('span', {}, ['Leitura (TTS):']),
+        el('span', {}, ['Leitura local (Piper):']),
         piperPill,
         installPiperBtn,
       ]),
       piperHint,
+      el('p', { class: 'hint' }, [
+        'A leitura neural (Edge) funciona sem instalar nada. O Piper é opcional, para leitura 100% offline.',
+      ]),
       piperLog,
     ]),
 

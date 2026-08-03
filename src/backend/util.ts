@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
+import { spawn } from 'node:child_process';
 
 /**
  * Resolve o caminho de um binário procurando: caminho explícito (override),
@@ -122,4 +123,77 @@ export async function downloadFile(
     out.on('error', j);
   });
   fs.renameSync(partPath, dest);
+}
+
+/**
+ * Extrai um arquivo (.zip ou .tar.gz) para destDir usando o `tar` do sistema.
+ * - Windows: o bsdtar embutido (Win10+) lê tanto .zip quanto .tar.gz.
+ * - macOS: o tar (bsdtar) também lê ambos.
+ * - Linux: o GNU tar lê .tar.gz nativamente (só baixamos .tar.gz no Linux).
+ * `-xf` detecta a compressão automaticamente.
+ */
+export function extractArchive(archivePath: string, destDir: string): Promise<void> {
+  fs.mkdirSync(destDir, { recursive: true });
+  // No Windows, invoca o bsdtar do sistema (System32) por caminho absoluto: o
+  // `tar` do PATH pode ser o GNU tar (Git for Windows), que (a) não lê .zip e
+  // (b) trata "C:\…" como host remoto ("tar: Cannot connect to C: resolve failed").
+  const tarBin =
+    process.platform === 'win32'
+      ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe')
+      : 'tar';
+  return new Promise((resolve, reject) => {
+    const p = spawn(tarBin, ['-xf', archivePath, '-C', destDir], { windowsHide: true });
+    let err = '';
+    p.stderr?.on('data', (c) => (err += c));
+    p.on('error', reject);
+    p.on('exit', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Falha ao extrair (${code}): ${err.slice(0, 300)}`));
+    });
+  });
+}
+
+/**
+ * Remove o "Mark of the Web" dos arquivos extraídos (Windows). Sem isso, o
+ * SmartScreen/Defender pode bloquear binários/DLLs baixados ("editor
+ * desconhecido"). Não-fatal — resolve mesmo se falhar.
+ */
+export function unblockDownloadedFiles(dir: string): Promise<void> {
+  if (process.platform !== 'win32') return Promise.resolve();
+  return new Promise((resolve) => {
+    const ps = spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `Get-ChildItem -LiteralPath '${dir}' -Recurse -File | Unblock-File`,
+      ],
+      { windowsHide: true },
+    );
+    ps.on('error', () => resolve());
+    ps.on('exit', () => resolve());
+  });
+}
+
+interface ReleaseAsset {
+  name: string;
+  browser_download_url: string;
+}
+
+/**
+ * Consulta a última release de um repositório no GitHub e retorna o primeiro
+ * asset cujo nome satisfaz o predicado. Consultar em runtime evita fixar uma
+ * versão que quebra quando os autores publicam uma nova release.
+ */
+export async function findLatestReleaseAsset(
+  repo: string,
+  match: (name: string) => boolean,
+): Promise<ReleaseAsset | null> {
+  const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'sts-app' },
+  });
+  if (!res.ok) throw new Error(`GitHub API ${res.status} para ${repo}`);
+  const data = (await res.json()) as { assets?: ReleaseAsset[] };
+  return data.assets?.find((a) => match(a.name)) ?? null;
 }

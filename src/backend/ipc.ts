@@ -1,12 +1,13 @@
-import { ipcMain, dialog, BrowserWindow } from 'electron';
+import { ipcMain, dialog, BrowserWindow, clipboard } from 'electron';
 import fs from 'node:fs';
 import {
   EngineStatus,
   IPC,
   ModelKind,
   Settings,
+  TtsEngine,
 } from '../shared/types';
-import { ExportResult, CloneEnsure } from '../shared/api';
+import { ExportResult, CloneEnsure, PiperEnsure } from '../shared/api';
 import { writeAudio } from './audioExport';
 import { encodeWav } from './util';
 import { getSettings, setSettings } from './settings';
@@ -17,20 +18,36 @@ import {
   removeModel,
   whisperModelPath,
 } from './models/manager';
-import { transcribe, stopServer, whisperStatus } from './engines/whisper';
+import {
+  transcribe,
+  stopWhisper,
+  whisperStatus,
+  installWhisperBinary,
+} from './engines/whisper';
 import { synth } from './engines/piper';
-import { synthClone } from './engines/voiceClone';
+import { synthEdge, listEdgeVoices } from './engines/edgeTts';
+import { synthClone, synthSegment, stopWorker as stopClone } from './engines/voiceClone';
 import {
   setupPiperEnv,
-  systemPython,
   venvReady,
   piperInstalled,
   setupCloneEnv,
-  python311,
+  pythonRuntimeReady,
   cloneVenvReady,
   chatterboxInstalled,
 } from './pythonEnv';
-import { venvPython, cloneRefPath } from './paths';
+import { cloneRefPath } from './paths';
+
+/** Sintetiza um WAV/MP3 com o motor escolhido. Retorna os bytes. */
+async function synthWithEngine(
+  text: string,
+  engine: TtsEngine,
+  voice: string,
+  rate: number,
+): Promise<Buffer> {
+  if (engine === 'edge') return synthEdge(text, { voice, rate });
+  return synth(text, voice, { rate }); // piper
+}
 
 export function registerIpc(): void {
   ipcMain.handle(IPC.settingsGet, () => getSettings());
@@ -45,6 +62,8 @@ export function registerIpc(): void {
     removeModel(kind, id);
   });
 
+  // ------------------------------- Whisper (STT) -------------------------------
+
   ipcMain.handle(
     IPC.whisperTranscribe,
     async (_e, pcm: ArrayBuffer, sampleRate: number, language?: string) => {
@@ -56,47 +75,128 @@ export function registerIpc(): void {
       return transcribe(modelPath, samples, sampleRate, language ?? s.whisperLanguage);
     },
   );
-  ipcMain.handle(IPC.whisperStop, () => stopServer());
+  ipcMain.handle(IPC.whisperStop, () => stopWhisper());
+  ipcMain.handle(IPC.whisperSetup, () => installWhisperBinary());
 
-  ipcMain.handle(IPC.piperEnsure, async () => ({
-    systemPython: systemPython(),
-    venvReady: venvReady(),
-    piperInstalled: await piperInstalled(),
-  }));
-  ipcMain.handle(IPC.piperSetup, () => setupPiperEnv());
+  // Salva um texto (ex.: transcrição) num .txt escolhido pelo usuário.
   ipcMain.handle(
-    IPC.piperSynth,
-    async (_e, text: string, voiceId: string, rate: number) => {
-      const buf = await synth(text, voiceId, { rate });
+    IPC.saveText,
+    async (e, text: string, suggestedName: string): Promise<ExportResult> => {
+      const win = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+      const { canceled, filePath } = await dialog.showSaveDialog(win!, {
+        title: 'Salvar transcrição',
+        defaultPath: suggestedName,
+        filters: [{ name: 'Texto', extensions: ['txt'] }],
+      });
+      if (canceled || !filePath) return { canceled: true };
+      fs.writeFileSync(filePath, text, 'utf8');
+      return { canceled: false, path: filePath };
+    },
+  );
+
+  // Salva bytes de áudio já gerados (evita re-sintetizar ao exportar).
+  ipcMain.handle(
+    IPC.saveAudio,
+    async (e, bytes: ArrayBuffer, suggestedName: string): Promise<ExportResult> => {
+      const win = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+      const { canceled, filePath } = await dialog.showSaveDialog(win!, {
+        title: 'Salvar áudio',
+        defaultPath: suggestedName,
+        filters: [
+          { name: 'WAV', extensions: ['wav'] },
+          { name: 'MP3', extensions: ['mp3'] },
+        ],
+      });
+      if (canceled || !filePath) return { canceled: true };
+      await writeAudio(Buffer.from(new Uint8Array(bytes)), filePath);
+      return { canceled: false, path: filePath };
+    },
+  );
+
+  // Salva PCM float32 (ex.: segmentos concatenados) como WAV/MP3 escolhido.
+  ipcMain.handle(
+    IPC.saveWavFromPcm,
+    async (
+      e,
+      pcm: ArrayBuffer,
+      sampleRate: number,
+      suggestedName: string,
+    ): Promise<ExportResult> => {
+      const win = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+      const { canceled, filePath } = await dialog.showSaveDialog(win!, {
+        title: 'Salvar áudio',
+        defaultPath: suggestedName,
+        filters: [
+          { name: 'WAV', extensions: ['wav'] },
+          { name: 'MP3', extensions: ['mp3'] },
+        ],
+      });
+      if (canceled || !filePath) return { canceled: true };
+      await writeAudio(encodeWav(new Float32Array(pcm), sampleRate), filePath);
+      return { canceled: false, path: filePath };
+    },
+  );
+
+  // Copia para a área de transferência via módulo nativo (o navigator.clipboard
+  // do renderer falha no Electron com "permission denied" sem foco/permissão).
+  ipcMain.handle(IPC.clipboardWrite, (_e, text: string) => {
+    clipboard.writeText(text ?? '');
+  });
+
+  // ------------------------------- TTS (Ler) -------------------------------
+
+  ipcMain.handle(IPC.ttsVoices, () => listEdgeVoices());
+
+  ipcMain.handle(
+    IPC.ttsSynth,
+    async (_e, text: string, engine: TtsEngine, voice: string, rate: number) => {
+      const buf = await synthWithEngine(text, engine, voice, rate);
       return buf; // vira Uint8Array no renderer
     },
   );
 
   ipcMain.handle(
     IPC.ttsExport,
-    async (e, text: string, voiceId: string, rate: number): Promise<ExportResult> => {
+    async (
+      e,
+      text: string,
+      engine: TtsEngine,
+      voice: string,
+      rate: number,
+    ): Promise<ExportResult> => {
       const win = BrowserWindow.fromWebContents(e.sender) ?? undefined;
-      const voice = findVoice(voiceId);
-      const base = (voice?.language ? `fala-${voice.language}` : 'fala').replace(/[^\w-]/g, '');
+      const base =
+        engine === 'piper'
+          ? (findVoice(voice)?.language ? `fala-${findVoice(voice)!.language}` : 'fala')
+          : `fala-${voice}`;
       const { canceled, filePath } = await dialog.showSaveDialog(win!, {
         title: 'Salvar áudio',
-        defaultPath: `${base}.mp3`,
+        defaultPath: `${base.replace(/[^\w-]/g, '')}.mp3`,
         filters: [
           { name: 'MP3', extensions: ['mp3'] },
           { name: 'WAV', extensions: ['wav'] },
         ],
       });
       if (canceled || !filePath) return { canceled: true };
-      const wav = await synth(text, voiceId, { rate });
-      await writeAudio(wav, filePath);
+      const buf = await synthWithEngine(text, engine, voice, rate);
+      await writeAudio(buf, filePath);
       return { canceled: false, path: filePath };
     },
   );
 
-  // ----------------------------- Clonagem de voz -----------------------------
+  // ------------------------------- Piper (setup local) -------------------------------
+
+  ipcMain.handle(IPC.piperEnsure, async (): Promise<PiperEnsure> => ({
+    pythonRuntimeReady: pythonRuntimeReady(),
+    venvReady: venvReady(),
+    piperInstalled: await piperInstalled(),
+  }));
+  ipcMain.handle(IPC.piperSetup, () => setupPiperEnv());
+
+  // ------------------------------- Clonagem de voz -------------------------------
 
   ipcMain.handle(IPC.cloneEnsure, async (): Promise<CloneEnsure> => ({
-    python311: python311(),
+    pythonRuntimeReady: pythonRuntimeReady(),
     venvReady: cloneVenvReady(),
     installed: await chatterboxInstalled(),
     hasReference: fs.existsSync(cloneRefPath()),
@@ -119,6 +219,11 @@ export function registerIpc(): void {
     return synthClone(text, language); // vira Uint8Array no renderer
   });
 
+  ipcMain.handle(IPC.cloneSynthSegment, async (_e, text: string, language: string) => {
+    return synthSegment(text, language); // uma frase, via pool
+  });
+  ipcMain.handle(IPC.cloneStop, () => stopClone());
+
   ipcMain.handle(
     IPC.cloneExport,
     async (e, text: string, language: string): Promise<ExportResult> => {
@@ -138,14 +243,7 @@ export function registerIpc(): void {
     },
   );
 
-  ipcMain.handle(IPC.enginesStatus, async (): Promise<EngineStatus> => {
-    return {
-      whisper: whisperStatus(),
-      piper: {
-        venvReady: venvReady(),
-        pythonPath: venvReady() ? venvPython() : null,
-        available: !!systemPython(),
-      },
-    };
-  });
+  ipcMain.handle(IPC.enginesStatus, async (): Promise<EngineStatus> => ({
+    whisper: whisperStatus(),
+  }));
 }

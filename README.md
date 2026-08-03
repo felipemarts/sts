@@ -1,35 +1,37 @@
 # STS — Fala local (Speech-to-Text + Text-to-Speech)
 
-App desktop (Electron) com **transcrição de fala** e **leitura de texto** rodando
-**100% localmente** — nenhum áudio ou texto sai da sua máquina.
+App desktop (Electron) com **transcrição de fala**, **leitura de texto** e
+**clonagem de voz**. O foco é **funcionar sem configuração manual**: o app baixa
+sozinho tudo que precisa (binário do Whisper, Python embutido, modelos e vozes)
+na pasta `userData` — nada é instalado no sistema nem versionado no repositório.
 
-- 🎙 **Escutar** — captura o microfone e transcreve em tempo real (VAD por energia)
-  usando **Whisper** ([whisper.cpp](https://github.com/ggml-org/whisper.cpp)).
-- 🔊 **Ler** — sintetiza texto em voz neural com **[Piper](https://github.com/OHF-Voice/piper1-gpl)**,
-  com controle de velocidade e volume, e **exporta o áudio em MP3 ou WAV**.
+- 🎙 **Escutar** — captura o microfone e transcreve (VAD por energia) usando
+  **Whisper** ([whisper.cpp](https://github.com/ggml-org/whisper.cpp)). O binário
+  é **baixado automaticamente** no Windows e no Linux; no macOS usa o
+  `whisper-cli` do Homebrew.
+- 🔊 **Ler** — sintetiza texto em voz neural com dois motores:
+  - **Neural (Edge)** — vozes neurais da Microsoft (as mesmas do Azure),
+    **grátis, sem instalação**, funciona na hora (precisa de internet). É o padrão.
+  - **Local (Piper)** — [Piper](https://github.com/OHF-Voice/piper1-gpl), **100%
+    offline**. Instala-se em 1 clique (o app baixa um Python embutido + o
+    `piper-tts`, sem depender de Python do sistema).
+  - Exporta o áudio em **MP3 ou WAV**.
 - 🧬 **Clonar** — grava uma amostra da sua voz e sintetiza qualquer texto com ela,
-  usando **[Chatterbox](https://github.com/resemble-ai/chatterbox)** (licença MIT).
-  Recurso avançado e mais pesado (ver abaixo).
+  usando **[Chatterbox](https://github.com/resemble-ai/chatterbox)** (MIT).
+  Recurso avançado e pesado (ver abaixo).
 - ⚙ **Gerenciador de modelos** — baixa, guarda e remove modelos Whisper e vozes
   Piper (vários idiomas) pela própria interface.
 
-> Modelos, vozes e o ambiente Python do Piper ficam na pasta `userData` do app —
-> **nada disso é versionado no repositório**.
-
 ## Pré-requisitos
 
-- **Node.js 18+** e npm
-- **whisper.cpp** (fornece o binário `whisper-server`)
-  - macOS: `brew install whisper-cpp`
-  - O app procura `whisper-server` no `PATH` e em locais comuns; você também pode
-    apontar o caminho manualmente em **Configurações**.
-- **Python 3.9+** (o app cria um _venv_ isolado e instala o `piper-tts` sozinho
-  ao clicar em **Instalar Piper**)
-- **ffmpeg** (opcional, só para exportar em **MP3** — WAV não precisa)
-  - macOS: `brew install ffmpeg`
-- **Python 3.11** (opcional, só para a **Clonagem de voz**)
-  - macOS: `brew install python@3.11`
-  - O app cria um _venv_ separado e instala o `chatterbox-tts` (+ PyTorch, ~2–3 GB)
+- **Node.js 18+** e npm (só para desenvolvimento).
+- **Internet** na primeira vez (para baixar binários/modelos) e para o TTS Edge.
+- **macOS apenas:** o binário do whisper.cpp não é publicado para macOS; instale
+  com `brew install whisper-cpp` (ou aponte o caminho do binário em
+  **Configurações**). No Windows e no Linux o app baixa o binário sozinho.
+
+> Não é preciso instalar Python, whisper.cpp (fora do macOS) nem nada mais: o app
+> resolve tudo sob demanda.
 
 ## Rodando em desenvolvimento
 
@@ -41,31 +43,30 @@ npm start
 ### Primeiro uso
 
 1. Abra a aba **Configurações**.
-2. Em **Motores**, confirme que o whisper.cpp foi encontrado e clique em
-   **Instalar Piper** (cria o venv + instala o `piper-tts`).
-3. Baixe pelo menos **um modelo Whisper** (ex.: _Large v3 Turbo_) e **uma voz Piper**
-   (ex.: _Português BR — Faber_).
+2. Em **Motores › Transcrição (STT)**, clique em **Instalar Whisper** (baixa o
+   binário — ~30 MB, uma vez só). No macOS, garanta o `brew install whisper-cpp`.
+3. Baixe pelo menos **um modelo Whisper** (ex.: _Large v3 Turbo_).
 4. Selecione o **modelo de transcrição ativo** e permita o **microfone**.
-5. Vá para **Escutar** e clique em **Iniciar captura**, ou para **Ler** e digite um texto.
+5. Vá para **Escutar** e clique em **Iniciar captura**.
+6. Para ouvir texto, vá em **Ler** — o motor **Neural (Edge)** já funciona na
+   hora. Se quiser leitura offline, instale o **Piper** em Configurações.
 
 ## Clonagem de voz (avançado)
 
 A aba **Clonar** usa o [Chatterbox](https://github.com/resemble-ai/chatterbox) (MIT)
 para clonagem _zero-shot_: sintetiza texto imitando o timbre de uma amostra curta.
 
-1. Instale o **Python 3.11** (`brew install python@3.11`).
-2. Na aba **Clonar**, clique em **Instalar clonagem** — cria um _venv_ separado e
-   baixa `chatterbox-tts` + PyTorch (~2–3 GB). O modelo (~1 GB) é baixado do
-   HuggingFace no primeiro uso.
-3. **Grave ~10s** da voz (fale naturalmente, sem ruído de fundo).
-4. Escolha o idioma, digite o texto e clique em **Ler com voz clonada** ou **Salvar…**.
+1. Na aba **Clonar**, clique em **Instalar clonagem** — o app baixa um **Python
+   3.11 embutido** e instala `chatterbox-tts` + PyTorch (~2–3 GB) num _venv_
+   isolado. O modelo (~1 GB) é baixado do HuggingFace no primeiro uso.
+2. **Grave ~10s** da voz (fale naturalmente, sem ruído de fundo).
+3. Escolha o idioma, digite o texto e clique em **Ler com voz clonada** ou **Salvar…**.
 
-> **Desempenho:** roda em **CPU** por padrão (em Apple Silicon o MPS ficou ~8x
-> mais lento por _fallback_). Espere ~30s para carregar o modelo (uma vez por
-> sessão) e **~1–2 min por frase**. Dá para experimentar `STS_CLONE_DEVICE=mps`.
+> **Desempenho:** roda em **CPU** por padrão. Espere ~30s para carregar o modelo
+> (uma vez por sessão) e **~1–2 min por frase**. Dá para experimentar
+> `STS_CLONE_DEVICE=mps` (Apple Silicon) ou `cuda`.
 >
-> Tudo (venv, cache de modelos, amostra) fica em `userData`, fora do repositório.
-> Os pesos do Chatterbox são MIT.
+> Tudo (Python, venv, cache de modelos, amostra) fica em `userData`, fora do repositório.
 
 ## Empacotando
 
@@ -73,29 +74,32 @@ para clonagem _zero-shot_: sintetiza texto imitando o timbre de uma amostra curt
 npm run make
 ```
 
-> Observação: o empacotamento atual **não** embute o `whisper.cpp` nem o Python —
-> eles são resolvidos do ambiente. Embutir os binários é um passo futuro para
-> distribuição standalone.
+> Observação: o empacotamento **não** embute o whisper.cpp nem o Python — eles são
+> baixados sob demanda na primeira execução. Embutir os binários é um passo futuro
+> para distribuição totalmente offline.
 
 ## Arquitetura
 
 | Camada | Papel |
 | --- | --- |
 | `src/main.ts` | Processo principal do Electron: janela, permissões, IPC |
-| `src/backend/` | Engines (Whisper/Piper), gerenciador de modelos, venv, settings |
+| `src/backend/` | Engines (Whisper/Edge/Piper/Clone), gerenciador de modelos, Python embutido, settings |
 | `src/preload.ts` | Ponte segura `window.sts` (contextIsolation) |
-| `src/ui/` | Renderer: abas Escutar/Ler/Configurações, captura + VAD |
+| `src/ui/` | Renderer: abas Escutar/Ler/Clonar/Configurações, captura + VAD |
 | `src/shared/` | Tipos e contrato de IPC compartilhados |
 
 - **STT:** o renderer captura PCM 16 kHz mono, um VAD por energia recorta segmentos
-  de fala e os envia ao `whisper-server` (modelo carregado em memória) via IPC.
-- **TTS:** o texto é sintetizado pelo Piper (no venv) em um WAV; a velocidade usa o
-  `length_scale` do Piper e o volume é aplicado no playback (Web Audio).
+  de fala e os envia ao main via IPC; o `whisper-cli` transcreve cada segmento.
+- **TTS Edge:** o main abre um WebSocket com o serviço "Read Aloud" do Edge e
+  devolve um MP3. Só o **texto** a ser lido sai da máquina — nunca o áudio do microfone.
+- **TTS Piper / Clone:** rodam num Python embutido (baixado sob demanda), 100% local.
 
 ## Privacidade
 
-Todo o processamento é local. O único acesso à rede é o **download de modelos**
-(HuggingFace), feito sob demanda quando você clica em baixar.
+O processamento de áudio (STT, Piper, clonagem) é **local**. As saídas de rede são:
+o **download de binários/modelos** (GitHub/HuggingFace) sob demanda, e — apenas se
+você usar o motor **Edge** de leitura — o **texto** enviado ao serviço da Microsoft.
+Para leitura 100% offline, use o **Piper**.
 
 ## Licença
 

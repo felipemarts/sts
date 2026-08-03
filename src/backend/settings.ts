@@ -7,6 +7,8 @@ const DEFAULTS: Settings = {
   whisperModel: null,
   whisperLanguage: 'auto',
   whisperServerPath: null,
+  ttsEngine: 'edge',
+  edgeVoice: null,
   piperVoice: null,
   ttsRate: 1.0,
   ttsVolume: 1.0,
@@ -14,6 +16,7 @@ const DEFAULTS: Settings = {
   vadHangoverMs: 700,
   cloneLanguage: 'pt',
   cloneRefPath: null,
+  clonePoolSize: 1,
 };
 
 let cache: Settings | null = null;

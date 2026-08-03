@@ -24,6 +24,16 @@ export function whisperModelsDir(): string {
   return ensureDir(path.join(modelsDir(), 'whisper'));
 }
 
+/** Raiz da instalação do whisper.cpp baixada pelo app (binário + libs). */
+export function whisperDir(): string {
+  return ensureDir(path.join(userDataDir(), 'whisper'));
+}
+
+/** Diretório onde o binário whisper.cpp (e DLLs/libs) é extraído. */
+export function whisperBinDir(): string {
+  return path.join(whisperDir(), 'bin');
+}
+
 export function piperVoicesDir(): string {
   return ensureDir(path.join(modelsDir(), 'piper'));
 }
@@ -31,6 +41,23 @@ export function piperVoicesDir(): string {
 /** Diretório do ambiente Python (venv) usado pelo Piper. */
 export function pythonDir(): string {
   return ensureDir(path.join(userDataDir(), 'python'));
+}
+
+/**
+ * Raiz onde o Python 3.11 embutido (python-build-standalone) é extraído.
+ * O arquivo `install_only` extrai para uma subpasta `python/`. Esse interpretador
+ * é a base tanto do venv do Piper quanto do venv da clonagem — o app não depende
+ * de nenhum Python instalado no sistema.
+ */
+export function embeddedPythonRoot(): string {
+  return path.join(pythonDir(), 'runtime');
+}
+
+/** Caminho do interpretador Python embutido (posix/win). */
+export function embeddedPython(): string {
+  return process.platform === 'win32'
+    ? path.join(embeddedPythonRoot(), 'python', 'python.exe')
+    : path.join(embeddedPythonRoot(), 'python', 'bin', 'python3');
 }
 
 export function venvDir(): string {

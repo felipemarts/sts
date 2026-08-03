@@ -1,18 +1,28 @@
 import { app, BrowserWindow, session } from 'electron';
 import path from 'node:path';
+import fs from 'node:fs';
 import started from 'electron-squirrel-startup';
 import { registerIpc } from './backend/ipc';
-import { stopServer } from './backend/engines/whisper';
+import { stopWhisper } from './backend/engines/whisper';
 import { stopWorker } from './backend/engines/voiceClone';
 
 function stopEngines() {
-  stopServer();
+  stopWhisper();
   stopWorker();
 }
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {
   app.quit();
+}
+
+/** Ícone da janela: empacotado (resources/) ou, em dev, a partir da raiz do repo. */
+function resolveIcon(): string | undefined {
+  const candidates = [
+    path.join(process.resourcesPath, 'icon.png'),
+    path.join(__dirname, '..', '..', 'assets', 'icon.png'),
+  ];
+  return candidates.find((p) => fs.existsSync(p));
 }
 
 const createWindow = () => {
@@ -23,6 +33,7 @@ const createWindow = () => {
     minHeight: 520,
     title: 'STS — Fala local',
     backgroundColor: '#0f1115',
+    icon: resolveIcon(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

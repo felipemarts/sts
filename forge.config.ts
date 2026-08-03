@@ -11,6 +11,10 @@ const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
     appBundleId: 'com.felipemarts.sts',
+    // Ícone do app embutido no executável/bundle (packager escolhe .ico/.icns).
+    icon: './assets/icon',
+    // Copia o PNG para resources/ para o BrowserWindow usar em runtime (Linux/janela).
+    extraResource: ['./assets/icon.png'],
     // macOS: sem estas descrições o sistema NEGA o microfone (getUserMedia falha).
     extendInfo: {
       NSMicrophoneUsageDescription:
@@ -19,7 +23,7 @@ const config: ForgeConfig = {
   },
   rebuildConfig: {},
   makers: [
-    new MakerSquirrel({}),
+    new MakerSquirrel({ setupIcon: './assets/icon.ico' }),
     new MakerZIP({}, ['darwin']),
     new MakerRpm({
       options: {

@@ -24,15 +24,20 @@ const api: StsApi = {
     transcribe: (pcm, sampleRate, language) =>
       ipcRenderer.invoke(IPC.whisperTranscribe, pcm, sampleRate, language),
     stop: () => ipcRenderer.invoke(IPC.whisperStop),
+    setup: () => ipcRenderer.invoke(IPC.whisperSetup),
+    onSetupProgress: (cb) => subscribe<SetupProgress>(IPC.whisperSetupProgress, cb),
+  },
+  tts: {
+    voices: () => ipcRenderer.invoke(IPC.ttsVoices),
+    synth: (text, engine, voice, rate) =>
+      ipcRenderer.invoke(IPC.ttsSynth, text, engine, voice, rate),
+    export: (text, engine, voice, rate) =>
+      ipcRenderer.invoke(IPC.ttsExport, text, engine, voice, rate),
   },
   piper: {
     ensure: () => ipcRenderer.invoke(IPC.piperEnsure),
     setup: () => ipcRenderer.invoke(IPC.piperSetup),
     onSetupProgress: (cb) => subscribe<SetupProgress>(IPC.piperSetupProgress, cb),
-    synth: (text, voiceId, rate) =>
-      ipcRenderer.invoke(IPC.piperSynth, text, voiceId, rate),
-    export: (text, voiceId, rate) =>
-      ipcRenderer.invoke(IPC.ttsExport, text, voiceId, rate),
   },
   clone: {
     ensure: () => ipcRenderer.invoke(IPC.cloneEnsure),
@@ -41,11 +46,18 @@ const api: StsApi = {
     saveReference: (pcm, sampleRate) =>
       ipcRenderer.invoke(IPC.cloneSaveReference, pcm, sampleRate),
     synth: (text, language) => ipcRenderer.invoke(IPC.cloneSynth, text, language),
+    synthSegment: (text, language) => ipcRenderer.invoke(IPC.cloneSynthSegment, text, language),
+    stop: () => ipcRenderer.invoke(IPC.cloneStop),
     export: (text, language) => ipcRenderer.invoke(IPC.cloneExport, text, language),
   },
   engines: {
     status: () => ipcRenderer.invoke(IPC.enginesStatus),
   },
+  saveText: (text, suggestedName) => ipcRenderer.invoke(IPC.saveText, text, suggestedName),
+  copyText: (text) => ipcRenderer.invoke(IPC.clipboardWrite, text),
+  saveAudio: (bytes, suggestedName) => ipcRenderer.invoke(IPC.saveAudio, bytes, suggestedName),
+  saveWavFromPcm: (pcm, sampleRate, suggestedName) =>
+    ipcRenderer.invoke(IPC.saveWavFromPcm, pcm, sampleRate, suggestedName),
 };
 
 contextBridge.exposeInMainWorld('sts', api);
