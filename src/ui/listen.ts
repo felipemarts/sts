@@ -36,6 +36,9 @@ export function createListenTab(goToSettings: () => void): Tab {
   let finalText = '';
   let queue: Promise<void> = Promise.resolve();
   let pending = 0;
+  let gotChunk = false;
+  let maxLevel = 0;
+  let signalTimer: ReturnType<typeof setTimeout> | null = null;
 
   langSelect.addEventListener('change', () => {
     window.sts.settings.set({ whisperLanguage: langSelect.value });
@@ -71,6 +74,10 @@ export function createListenTab(goToSettings: () => void): Tab {
 
   const stop = async () => {
     capturing = false;
+    if (signalTimer) {
+      clearTimeout(signalTimer);
+      signalTimer = null;
+    }
     startBtn.textContent = '▶  Iniciar captura';
     startBtn.classList.remove('rec');
     startBtn.classList.add('primary');
@@ -92,12 +99,16 @@ export function createListenTab(goToSettings: () => void): Tab {
       goToSettings();
       return;
     }
+    gotChunk = false;
+    maxLevel = 0;
     try {
       handle = await startCapture({
         deviceId: s.micDeviceId,
         threshold: s.vadThreshold,
         hangoverMs: s.vadHangoverMs,
         onLevel: (rms) => {
+          gotChunk = true;
+          if (rms > maxLevel) maxLevel = rms;
           const pct = Math.min(100, (rms / 0.3) * 100);
           meterFill.style.width = `${pct}%`;
         },
@@ -108,6 +119,20 @@ export function createListenTab(goToSettings: () => void): Tab {
       startBtn.textContent = '⏹  Parar captura';
       startBtn.classList.remove('primary');
       startBtn.classList.add('rec');
+
+      // Watchdog: avisa se nenhum áudio (ou só silêncio) chegar do microfone.
+      signalTimer = setTimeout(() => {
+        if (!capturing) return;
+        if (!gotChunk) {
+          errorBox.textContent =
+            'Nenhum áudio chegou do microfone. Verifique a permissão do sistema ' +
+            '(Ajustes › Privacidade e Segurança › Microfone) e o dispositivo em Configurações.';
+        } else if (maxLevel < 0.003) {
+          errorBox.textContent =
+            'Microfone praticamente em silêncio. Confira o dispositivo de entrada e o volume, ' +
+            'ou selecione outro microfone em Configurações.';
+        }
+      }, 4000);
     } catch (err) {
       errorBox.textContent =
         'Falha ao acessar o microfone: ' +

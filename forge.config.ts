@@ -10,6 +10,12 @@ import { FuseV1Options, FuseVersion } from '@electron/fuses';
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
+    appBundleId: 'com.felipemarts.sts',
+    // macOS: sem estas descrições o sistema NEGA o microfone (getUserMedia falha).
+    extendInfo: {
+      NSMicrophoneUsageDescription:
+        'O STS usa o microfone para transcrever sua fala localmente (Whisper) e gravar amostras para clonagem de voz.',
+    },
   },
   rebuildConfig: {},
   makers: [

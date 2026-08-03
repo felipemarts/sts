@@ -31,8 +31,13 @@ const createWindow = () => {
   });
 
   // Permite captura de microfone (getUserMedia) a partir do renderer.
+  // Precisa dos DOIS handlers: request (ao pedir) e check (verificação síncrona).
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => {
     cb(permission === 'media'); // getUserMedia (microfone) usa a permissão 'media'
+  });
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) => {
+    const p = permission as string;
+    return p === 'media' || p === 'microphone' || p === 'audioCapture';
   });
 
   mainWindow.webContents.on('did-fail-load', (_e, code, desc) =>

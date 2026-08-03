@@ -259,6 +259,37 @@ button.ghost {
   color: var(--text-dim);
   font-size: 12px;
 }
+
+/* ---- Leitura por parágrafo (TTS) ---- */
+.reading {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 340px;
+  overflow: auto;
+}
+.para {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  line-height: 1.55;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.para:hover {
+  border-color: var(--accent);
+}
+.para.done {
+  color: var(--text);
+}
+.para.active {
+  color: var(--text);
+  background: rgba(91, 157, 255, 0.14);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
 .error {
   color: var(--danger);
   font-size: 13px;

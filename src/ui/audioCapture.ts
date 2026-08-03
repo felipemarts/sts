@@ -1,5 +1,11 @@
 // Captura de microfone + VAD por energia (RMS) usando um AudioWorklet.
 // O worklet apenas repassa blocos de PCM; a máquina de estados do VAD roda aqui.
+//
+// IMPORTANTE: capturamos na taxa NATIVA do dispositivo e reamostramos para 16 kHz
+// só no fim de cada segmento. Forçar `new AudioContext({sampleRate:16000})` faz o
+// MediaStreamSource entregar SILÊNCIO em muitos setups (bug conhecido do Chromium).
+
+const TARGET_RATE = 16000;
 
 const WORKLET_CODE = `
 class CaptureProcessor extends AudioWorkletProcessor {
@@ -7,14 +13,13 @@ class CaptureProcessor extends AudioWorkletProcessor {
     super();
     this._buf = [];
     this._count = 0;
-    this._target = 1024; // ~64ms @16kHz
+    this._target = Math.max(256, Math.round(sampleRate * 0.05)); // ~50ms
   }
   process(inputs) {
     const input = inputs[0];
     if (input && input[0]) {
-      const ch = input[0];
-      this._buf.push(new Float32Array(ch));
-      this._count += ch.length;
+      this._buf.push(new Float32Array(input[0]));
+      this._count += input[0].length;
       if (this._count >= this._target) {
         const out = new Float32Array(this._count);
         let o = 0;
@@ -52,26 +57,53 @@ function rmsOf(chunk: Float32Array): number {
   return Math.sqrt(sum / chunk.length);
 }
 
+/** Reamostra PCM float32 para `toRate` por interpolação linear. */
+function resample(input: Float32Array, fromRate: number, toRate: number): Float32Array {
+  if (fromRate === toRate || input.length === 0) return input;
+  const ratio = fromRate / toRate;
+  const outLen = Math.floor(input.length / ratio);
+  const out = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const idx = i * ratio;
+    const i0 = Math.floor(idx);
+    const i1 = Math.min(i0 + 1, input.length - 1);
+    out[i] = input[i0] + (input[i1] - input[i0]) * (idx - i0);
+  }
+  return out;
+}
+
 export async function listInputDevices(): Promise<MediaDeviceInfo[]> {
   const devices = await navigator.mediaDevices.enumerateDevices();
   return devices.filter((d) => d.kind === 'audioinput');
+}
+
+async function getMicStream(deviceId?: string | null): Promise<MediaStream> {
+  const base: MediaTrackConstraints = {
+    channelCount: 1,
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  };
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: deviceId ? { ...base, deviceId: { exact: deviceId } } : base,
+    });
+  } catch (err) {
+    // deviceId inválido/ausente → tenta o microfone padrão do sistema
+    if (deviceId) {
+      return navigator.mediaDevices.getUserMedia({ audio: base });
+    }
+    throw err;
+  }
 }
 
 export async function startCapture(opts: CaptureOptions): Promise<CaptureHandle> {
   const minSpeechMs = opts.minSpeechMs ?? 250;
   const maxSegmentMs = opts.maxSegmentMs ?? 20000;
 
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      deviceId: opts.deviceId ? { exact: opts.deviceId } : undefined,
-      channelCount: 1,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-  });
+  const stream = await getMicStream(opts.deviceId);
 
-  const ctx = new AudioContext({ sampleRate: 16000 });
+  const ctx = new AudioContext(); // taxa NATIVA (evita silêncio do MediaStreamSource)
   await ctx.resume();
   const sampleRate = ctx.sampleRate;
 
@@ -109,7 +141,9 @@ export async function startCapture(opts: CaptureOptions): Promise<CaptureHandle>
         merged.set(b, o);
         o += b.length;
       }
-      opts.onSegment(merged, sampleRate);
+      // reamostra para 16 kHz (o que o whisper.cpp espera)
+      const out = resample(merged, sampleRate, TARGET_RATE);
+      opts.onSegment(out, TARGET_RATE);
     }
     segment = [];
     segmentMs = 0;
@@ -125,7 +159,6 @@ export async function startCapture(opts: CaptureOptions): Promise<CaptureHandle>
 
     if (rms >= opts.threshold) {
       if (!speaking) {
-        // inicia o segmento com o pré-roll para não cortar o início da fala
         speaking = true;
         segment = [...preroll];
         segmentMs = prerollMs;
@@ -141,7 +174,6 @@ export async function startCapture(opts: CaptureOptions): Promise<CaptureHandle>
       if (silenceMs >= opts.hangoverMs) finalize();
     }
 
-    // atualiza pré-roll (janela deslizante)
     preroll.push(chunk);
     prerollMs += ms;
     while (prerollMs > PREROLL_MS && preroll.length > 1) {
