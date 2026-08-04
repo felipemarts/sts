@@ -328,15 +328,38 @@ export function createListenTab(goToSettings: () => void): Tab {
     errorBox,
   ]);
 
+  // Reflete o carregamento do modelo no worker (warmup) — o 1º uso importa o
+  // faster-whisper + carrega o modelo (~30-50s na 1ª vez). Sem isso, a captura
+  // "trava" no 1º trecho sem explicação.
+  let modelLabel = '';
+  window.sts.whisper.onSetupProgress((p) => {
+    if (p.error) {
+      statusPill.textContent = '⚠ erro no modelo';
+      statusPill.className = 'pill bad';
+      errorBox.textContent = p.message;
+    } else if (p.done) {
+      if (modelLabel) {
+        statusPill.textContent = `Modelo: ${modelLabel}`;
+        statusPill.className = 'pill ok';
+      }
+    } else if (p.stage === 'model') {
+      statusPill.textContent = '⏳ Carregando o modelo de voz (uma vez)…';
+      statusPill.className = 'pill';
+    }
+  });
+
   const refresh = async () => {
     const s = await window.sts.settings.get();
     langSelect.value = s.whisperLanguage;
     const status = await window.sts.models.status();
     if (s.whisperModel && status[s.whisperModel]) {
       const m = findWhisper(s.whisperModel);
-      statusPill.textContent = `Modelo: ${m?.label ?? s.whisperModel}`;
+      modelLabel = m?.label ?? s.whisperModel;
+      statusPill.textContent = `Modelo: ${modelLabel}`;
       statusPill.className = 'pill ok';
       startBtn.disabled = false;
+      // Pré-carrega o modelo no worker (esconde o load do 1º trecho).
+      window.sts.whisper.warmup();
     } else {
       statusPill.textContent = 'Nenhum modelo baixado';
       statusPill.className = 'pill bad';

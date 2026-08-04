@@ -3,11 +3,11 @@ import path from 'node:path';
 import fs from 'node:fs';
 import started from 'electron-squirrel-startup';
 import { registerIpc } from './backend/ipc';
-import { stopWhisper } from './backend/engines/whisper';
+import { shutdownWhisper } from './backend/engines/whisper';
 import { stopWorker } from './backend/engines/voiceClone';
 
 function stopEngines() {
-  stopWhisper();
+  shutdownWhisper();
   stopWorker();
 }
 

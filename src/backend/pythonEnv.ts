@@ -18,6 +18,8 @@ import {
   venvPython,
   cloneVenvDir,
   cloneVenvPython,
+  sttVenvDir,
+  sttVenvPython,
   embeddedPython,
   embeddedPythonRoot,
   pythonDir,
@@ -177,6 +179,29 @@ export function chatterboxInstalled(): Promise<boolean> {
   });
 }
 
+export function sttVenvReady(): boolean {
+  return fs.existsSync(sttVenvPython());
+}
+
+/** true se o pacote faster_whisper está instalado no venv de STT. */
+export function fasterWhisperInstalled(): boolean {
+  if (!sttVenvReady()) return false;
+  const sitePkgs = process.platform === 'win32'
+    ? path.join(sttVenvDir(), 'Lib', 'site-packages', 'faster_whisper')
+    : path.join(sttVenvDir(), 'lib');
+  if (process.platform === 'win32') return fs.existsSync(sitePkgs);
+  // posix: procura faster_whisper em qualquer pythonX/site-packages
+  try {
+    const libDir = path.join(sttVenvDir(), 'lib');
+    for (const py of fs.readdirSync(libDir)) {
+      if (fs.existsSync(path.join(libDir, py, 'site-packages', 'faster_whisper'))) return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
 function run(
   cmd: string,
   args: string[],
@@ -245,6 +270,51 @@ export async function setupPiperEnv(): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     emitPiper({ stage: 'error', message: msg, done: true, error: msg });
+    throw err;
+  }
+}
+
+// ------------------------------- STT (faster-whisper) -------------------------------
+
+function emitStt(p: SetupProgress) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send(IPC.whisperSetupProgress, p);
+  }
+}
+
+/**
+ * Garante o venv de STT com faster-whisper instalado. Usa o Python assinado do
+ * sistema (o SAC bloqueia o whisper.cpp não-assinado). Idempotente.
+ */
+export async function setupSttEnv(): Promise<void> {
+  try {
+    const py = await ensureBasePython(emitStt);
+
+    if (systemTrustedPython() && sttVenvReady() && venvIsEmbedded(sttVenvDir())) {
+      emitStt({ stage: 'venv', message: 'Recriando o ambiente com o Python do sistema…', done: false });
+      fs.rmSync(sttVenvDir(), { recursive: true, force: true });
+    }
+    if (!sttVenvReady()) {
+      emitStt({ stage: 'venv', message: 'Criando ambiente Python isolado…', done: false });
+      await run(py, ['-m', 'venv', sttVenvDir()], 'Criação do venv de STT');
+    }
+
+    if (!fasterWhisperInstalled()) {
+      emitStt({ stage: 'pip', message: 'Atualizando o pip…', done: false });
+      await run(sttVenvPython(), ['-m', 'pip', 'install', '--upgrade', 'pip'], 'Atualização do pip');
+      emitStt({ stage: 'whisper', message: 'Instalando faster-whisper (~200 MB)…', done: false });
+      await run(
+        sttVenvPython(),
+        ['-m', 'pip', 'install', 'faster-whisper'],
+        'Instalação do faster-whisper',
+        (line) => emitStt({ stage: 'whisper', message: line, done: false }),
+      );
+    }
+
+    emitStt({ stage: 'done', message: 'Whisper (Python) pronto.', done: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    emitStt({ stage: 'error', message: msg, done: true, error: msg });
     throw err;
   }
 }

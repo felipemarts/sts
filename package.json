@@ -1,7 +1,7 @@
 {
   "name": "sts",
   "productName": "STS",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Speech-to-text e text-to-speech 100% local (Whisper + Piper), com gerenciamento de modelos.",
   "main": ".vite/build/main.js",
   "private": true,

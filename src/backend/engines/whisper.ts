@@ -1,131 +1,134 @@
 /**
- * STT local via whisper.cpp (modo CLI, autoinstalável).
+ * STT local via faster-whisper (CTranslate2), rodando num venv Python.
  *
- * Diferente da versão antiga (que exigia um `whisper-server` já instalado no
- * sistema), aqui o binário do whisper.cpp é BAIXADO pelo próprio app para a
- * pasta userData — exatamente a abordagem dos projetos `agent`/`ditador`, que
- * funcionam sem nenhuma instalação manual:
+ * Por que NÃO whisper.cpp: em máquinas com Smart App Control (SAC) ligado, o
+ * binário não-assinado do whisper.cpp é BLOQUEADO ("Uma política de Controle de
+ * Aplicativo bloqueou este arquivo"). O faster-whisper roda no Python assinado
+ * do sistema e usa o ctranslate2 (wheel amplamente distribuído que o SAC
+ * aceita) — sem executável não-assinado. É também mais rápido na CPU.
  *
- *   - Windows / Linux: baixa o binário da release oficial do whisper.cpp.
- *   - macOS: não há binário CLI oficial nas releases; usa o `whisper-cli` do
- *     Homebrew (`brew install whisper-cpp`) ou um caminho definido nas
- *     Configurações.
- *
- * A transcrição roda o CLI uma vez por segmento de fala (o renderer recorta a
- * fala por VAD e manda o PCM). Simples e sem servidor/porta/HTTP — menos pontos
- * de falha em máquinas com antivírus/firewall restritivos.
+ * O modelo (por nome: tiny/base/small/medium/large-v3…) é baixado pelo próprio
+ * faster-whisper no cache HF. Um worker Python persistente mantém o modelo em
+ * memória; a transcrição escreve o PCM num WAV temporário e manda ao worker.
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ChildProcess, spawn } from 'node:child_process';
-import { app, BrowserWindow } from 'electron';
+import { BrowserWindow } from 'electron';
 import { IPC, SetupProgress } from '../../shared/types';
-import { getSettings } from '../settings';
-import { whisperBinDir, whisperDir, tmpDir } from '../paths';
-import {
-  resolveBinary,
-  encodeWav,
-  downloadFile,
-  extractArchive,
-  findLatestReleaseAsset,
-  unblockDownloadedFiles,
-} from '../util';
-
-const WHISPER_REPO = 'ggml-org/whisper.cpp';
+import { encodeWav } from '../util';
+import { sttVenvPython, sttWorkerPath, sttHfCacheDir, tmpDir } from '../paths';
+import { sttVenvReady, fasterWhisperInstalled, setupSttEnv } from '../pythonEnv';
+import { STT_WORKER_SOURCE } from './sttWorkerSource';
 
 let installing = false;
-const activeChildren = new Set<ChildProcess>();
 
-/** Nome do executável de transcrição por plataforma. */
-function cliName(): string {
-  return process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli';
-}
-function legacyName(): string {
-  return process.platform === 'win32' ? 'main.exe' : 'main';
+/** Mapeia o id do catálogo → nome do modelo faster-whisper. */
+const FW_NAME: Record<string, string> = {
+  tiny: 'tiny',
+  base: 'base',
+  small: 'small',
+  medium: 'medium',
+  'large-v3': 'large-v3',
+  'large-v3-turbo': 'large-v3-turbo',
+};
+export function fwModelName(id: string): string {
+  return FW_NAME[id] ?? id;
 }
 
-/** Procura, recursivamente, o executável do whisper.cpp dentro de `root`. */
-function findBinaryIn(root: string): string | null {
-  if (!fs.existsSync(root)) return null;
-  let legacy: string | null = null;
-  const stack = [root];
+/** Diretório do modelo CT2 no cache do HuggingFace. */
+export function sttModelCacheDir(id: string): string {
+  return path.join(sttHfCacheDir(), 'hub', `models--Systran--faster-whisper-${fwModelName(id)}`);
+}
+export function sttModelCached(id: string): boolean {
+  // "snapshots" com conteúdo = download concluído (o dir raiz existe cedo demais).
+  const snap = path.join(sttModelCacheDir(id), 'snapshots');
+  try {
+    return fs.readdirSync(snap).some((s) => fs.readdirSync(path.join(snap, s)).length > 0);
+  } catch {
+    return false;
+  }
+}
+
+function dirSize(dir: string): number {
+  let total = 0;
+  const stack = [dir];
   while (stack.length) {
-    const dir = stack.pop()!;
-    let entries: string[];
+    const d = stack.pop()!;
+    let entries: fs.Dirent[];
     try {
-      entries = fs.readdirSync(dir);
+      entries = fs.readdirSync(d, { withFileTypes: true });
     } catch {
       continue;
     }
-    for (const name of entries) {
-      const p = path.join(dir, name);
-      let st: fs.Stats;
-      try {
-        st = fs.statSync(p);
-      } catch {
-        continue;
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) stack.push(p);
+      else {
+        try { total += fs.statSync(p).size; } catch { /* ignore */ }
       }
-      if (st.isDirectory()) stack.push(p);
-      else if (name === cliName()) return p;
-      else if (name === legacyName()) legacy = p; // main é stub deprecado; só se não houver whisper-cli
     }
   }
-  return legacy;
+  return total;
 }
 
-function findDownloadedBinary(): string | null {
-  return findBinaryIn(whisperBinDir());
-}
-
-/**
- * Instalações de whisper.cpp de OUTROS apps do usuário que já rodam nesta
- * máquina (ex.: o projeto `agent`/jarvis-desktop). Reaproveitá-las evita
- * rebaixar o binário e — no Windows — usa uma cópia que o usuário já liberou no
- * SmartScreen/Defender, em vez de disparar o aviso "editor desconhecido".
- */
-function externalWhisperBinDirs(): string[] {
-  const dirs: string[] = [];
+/** Baixa o modelo CT2 do faster-whisper (garante o venv antes). */
+export async function downloadSttModel(id: string, onBytes: (n: number) => void): Promise<void> {
+  await setupSttEnv();
+  const name = fwModelName(id);
+  const cacheDir = sttModelCacheDir(id);
+  const poll = setInterval(() => onBytes(dirSize(cacheDir)), 600);
   try {
-    dirs.push(path.join(app.getPath('appData'), 'jarvis-desktop', 'whisper', 'bin'));
-  } catch {
-    /* ignore */
+    await new Promise<void>((resolve, reject) => {
+      const p = spawn(
+        sttVenvPython(),
+        ['-c', `from faster_whisper import WhisperModel; WhisperModel('${name}', device='cpu', compute_type='int8')`],
+        {
+          windowsHide: true,
+          env: {
+            ...process.env,
+            HF_HOME: sttHfCacheDir(),
+            HF_HUB_DISABLE_SYMLINKS_WARNING: '1',
+            TOKENIZERS_PARALLELISM: 'false',
+          },
+        },
+      );
+      let err = '';
+      p.stderr?.on('data', (c) => (err += c.toString()));
+      p.on('error', reject);
+      p.on('exit', (code) =>
+        code === 0 ? resolve() : reject(new Error(`Falha ao baixar o modelo (código ${code}): ${err.slice(-300)}`)),
+      );
+    });
+  } finally {
+    clearInterval(poll);
   }
-  return dirs;
 }
 
-/** Binário: override → instalação externa validada → baixado → sistema (brew). */
-export function whisperBinary(): string | null {
-  const override = getSettings().whisperServerPath;
-  if (override && fs.existsSync(override)) return override;
-  for (const dir of externalWhisperBinDirs()) {
-    const bin = findBinaryIn(dir);
-    if (bin) return bin;
-  }
-  const downloaded = findDownloadedBinary();
-  if (downloaded) return downloaded;
-  // Sistema (macOS via brew, ou qualquer PATH): tenta os nomes conhecidos.
-  return (
-    resolveBinary('whisper-cli') ||
-    resolveBinary('whisper-cpp') ||
-    resolveBinary('main')
-  );
-}
-
-/** true se a plataforma tem binário baixável automaticamente pelo app. */
 export function canAutoInstall(): boolean {
-  return process.platform === 'win32' || process.platform === 'linux';
+  return true;
 }
 
 export function whisperStatus() {
-  const bin = whisperBinary();
   return {
-    binaryPath: bin,
-    available: !!bin,
+    binaryPath: sttVenvReady() ? sttVenvPython() : null,
+    available: fasterWhisperInstalled(),
     installing,
-    canAutoInstall: canAutoInstall(),
+    canAutoInstall: true,
     platform: process.platform,
   };
+}
+
+/** Instala o ambiente Python de STT (venv + faster-whisper). */
+export async function installWhisperBinary(): Promise<void> {
+  if (installing) throw new Error('Instalação do Whisper já em andamento.');
+  installing = true;
+  try {
+    await setupSttEnv();
+  } finally {
+    installing = false;
+  }
 }
 
 function emitProgress(p: SetupProgress) {
@@ -134,168 +137,204 @@ function emitProgress(p: SetupProgress) {
   }
 }
 
-/** Escolhe o asset da release do whisper.cpp para esta plataforma. */
-function pickBinaryAsset(name: string): boolean {
-  const n = name.toLowerCase();
-  if (process.platform === 'win32') {
-    // BLAS acelerado, x64 (roda também no Windows ARM via emulação).
-    return n.includes('blas') && n.includes('x64') && n.endsWith('.zip') &&
-      !n.includes('win32') && !n.includes('cublas');
-  }
-  if (process.platform === 'linux') {
-    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
-    return n.includes('ubuntu') && n.includes(arch) && n.endsWith('.tar.gz');
-  }
-  return false;
+// -------------------------------- worker --------------------------------
+
+interface SttWorker {
+  proc: ChildProcess;
+  ready: boolean;
+  model: string;
+  buf: string;
+  pending: { resolve: (t: string) => void; reject: (e: Error) => void } | null;
 }
 
-/**
- * Baixa e extrai o binário do whisper.cpp (Windows/Linux). Idempotente.
- * Emite progresso para o renderer. Em macOS lança erro com orientação.
- */
-export async function installWhisperBinary(): Promise<void> {
-  if (whisperBinary()) return; // já há binário utilizável (baixado, externo ou do sistema)
-  if (installing) throw new Error('Instalação do Whisper já em andamento.');
-  if (!canAutoInstall()) {
-    throw new Error(
-      'No macOS o binário do whisper.cpp não é baixado automaticamente. ' +
-        'Instale com "brew install whisper-cpp" (ou defina o caminho do binário nas Configurações).',
-    );
-  }
-  installing = true;
+let worker: SttWorker | null = null;
+let starting: Promise<SttWorker> | null = null;
+const queue: Array<{ wav: string; language: string; resolve: (t: string) => void; reject: (e: Error) => void }> = [];
+
+function threads(): number {
+  // 0 = CTranslate2 usa todos os núcleos físicos (mais rápido). Fallback seguro
+  // caso a contagem de CPUs não esteja disponível.
+  return os.cpus().length > 0 ? 0 : 4;
+}
+
+function handleLine(w: SttWorker, line: string) {
+  const t = line.trim();
+  if (!t) return;
+  let msg: Record<string, unknown>;
   try {
-    emitProgress({ stage: 'binary', message: 'Procurando a release do whisper.cpp…', done: false });
-    const asset = await findLatestReleaseAsset(WHISPER_REPO, pickBinaryAsset);
-    if (!asset) {
-      throw new Error('Não encontrei um binário do whisper.cpp para esta plataforma na última release.');
+    msg = JSON.parse(t);
+  } catch {
+    console.log('[stt]', t);
+    return;
+  }
+  if (msg.log) {
+    emitProgress({ stage: 'model', message: String(msg.log), done: false });
+    return;
+  }
+  if (msg.ready) {
+    w.ready = true;
+    console.log(`[stt] worker pronto (modelo=${w.model})`);
+    dispatch();
+    return;
+  }
+  if (w.pending) {
+    const p = w.pending;
+    w.pending = null;
+    if (msg.error) {
+      console.log('[stt] erro do worker:', msg.error);
+      p.reject(new Error(String(msg.error)));
+    } else {
+      p.resolve(typeof msg.text === 'string' ? msg.text : '');
     }
-
-    const archive = path.join(whisperDir(), asset.name);
-    emitProgress({ stage: 'binary', message: `Baixando ${asset.name}…`, done: false });
-    await downloadFile(asset.browser_download_url, archive, (r, t) => {
-      const pct = t ? Math.floor((r / t) * 100) : 0;
-      emitProgress({ stage: 'binary', message: `Baixando o binário — ${pct}%`, done: false });
-    });
-
-    emitProgress({ stage: 'extract', message: 'Extraindo o binário…', done: false });
-    fs.rmSync(whisperBinDir(), { recursive: true, force: true });
-    await extractArchive(archive, whisperBinDir());
-    fs.rmSync(archive, { force: true });
-
-    const bin = findDownloadedBinary();
-    if (!bin) throw new Error('Executável não encontrado após extrair o pacote.');
-    if (process.platform !== 'win32') {
-      try {
-        fs.chmodSync(bin, 0o755);
-      } catch {
-        /* ignore */
-      }
-    }
-    await unblockDownloadedFiles(whisperBinDir()); // tira o Mark of the Web (Windows)
-    emitProgress({ stage: 'done', message: 'Whisper pronto.', done: true });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    emitProgress({ stage: 'error', message: msg, done: true, error: msg });
-    throw err;
-  } finally {
-    installing = false;
+    dispatch();
+  } else if (msg.error) {
+    console.log('[stt] erro de inicialização do worker:', msg.error);
   }
 }
 
-/** Remove ruídos típicos do Whisper ([BLANK_AUDIO], (música), ♪, etc). */
-function cleanTranscript(raw: string): string {
-  return raw
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .join(' ')
-    .replace(/\[[^\]]*\]/g, '')
-    .replace(/\([^)]*\)/g, '')
-    .replace(/♪/g, '')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
+function spawnWorker(model: string): Promise<SttWorker> {
+  fs.writeFileSync(sttWorkerPath(), STT_WORKER_SOURCE, 'utf8');
+  const child = spawn(sttVenvPython(), [sttWorkerPath()], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+    env: {
+      ...process.env,
+      HF_HOME: sttHfCacheDir(),
+      STS_STT_MODEL: model,
+      STS_STT_THREADS: String(threads()),
+      TOKENIZERS_PARALLELISM: 'false',
+    },
+  });
+  const w: SttWorker = { proc: child, ready: false, model, buf: '', pending: null };
+  worker = w; // atribui JÁ: o dispatch() precisa ver o worker durante o load (evita corrida)
+  child.stdout!.on('data', (d: Buffer) => {
+    w.buf += d.toString();
+    let idx: number;
+    while ((idx = w.buf.indexOf('\n')) >= 0) {
+      const line = w.buf.slice(0, idx);
+      w.buf = w.buf.slice(idx + 1);
+      handleLine(w, line);
+    }
+  });
+  child.stderr!.on('data', (d: Buffer) => console.log('[stt:err]', d.toString().trim()));
+  child.on('exit', () => {
+    if (worker === w) worker = null;
+    if (w.pending) {
+      w.pending.reject(new Error('O processo de STT encerrou inesperadamente.'));
+      w.pending = null;
+    }
+  });
+
+  return new Promise<SttWorker>((resolve, reject) => {
+    const start = Date.now();
+    const tick = setInterval(() => {
+      if (w.ready) {
+        clearInterval(tick);
+        resolve(w);
+      } else if (w.proc.exitCode !== null) {
+        clearInterval(tick);
+        reject(new Error('O worker de STT não iniciou.'));
+      } else if (Date.now() - start > 10 * 60 * 1000) {
+        clearInterval(tick);
+        reject(new Error('Timeout carregando o modelo de STT.'));
+      }
+    }, 120);
+  });
+}
+
+async function ensureWorker(model: string): Promise<void> {
+  if (worker && worker.model === model && worker.ready) return;
+  if (worker && worker.model !== model) {
+    // modelo mudou → descarta o worker (e o load) antigo
+    try { worker.proc.kill(); } catch { /* ignore */ }
+    worker = null;
+    starting = null;
+  }
+  if (!starting) starting = spawnWorker(model); // spawnWorker já atribui `worker`
+  const s = starting;
+  try {
+    await s; // resolve quando o worker fica pronto
+  } finally {
+    if (starting === s) starting = null;
+  }
+}
+
+function dispatch() {
+  if (!worker || !worker.ready || worker.pending) return;
+  const job = queue.shift();
+  if (!job) return;
+  worker.pending = { resolve: job.resolve, reject: job.reject };
+  console.log('[stt] enviando trecho ao worker');
+  try {
+    worker.proc.stdin!.write(JSON.stringify({ wav: job.wav, language: job.language }) + '\n');
+  } catch (e) {
+    worker.pending = null;
+    job.reject(e instanceof Error ? e : new Error(String(e)));
+  }
 }
 
 /**
- * Transcreve um segmento de PCM float32 mono. Retorna o texto.
- * Roda o whisper-cli uma vez, escrevendo o áudio num WAV temporário.
+ * Transcreve um segmento de PCM float32 mono. `modelId` é o id do catálogo
+ * (tiny/base/small/medium/large-v3…). Retorna o texto.
  */
 export async function transcribe(
-  modelPath: string,
+  modelId: string,
   pcm: Float32Array,
   sampleRate: number,
   language: string,
 ): Promise<string> {
-  const bin = whisperBinary();
-  if (!bin) {
-    throw new Error(
-      canAutoInstall()
-        ? 'whisper.cpp ainda não instalado. Vá em Configurações e clique em "Instalar Whisper".'
-        : 'whisper.cpp não encontrado. Instale com "brew install whisper-cpp" ou defina o caminho nas Configurações.',
-    );
+  if (!fasterWhisperInstalled()) {
+    throw new Error('Whisper (Python) não instalado. Vá em Configurações e clique em "Instalar Whisper".');
   }
-  if (!fs.existsSync(modelPath)) {
-    throw new Error('Modelo Whisper selecionado não está baixado.');
+  console.log(`[stt] transcribe: modelo=${fwModelName(modelId)} amostras=${pcm.length} sr=${sampleRate}`);
+  try {
+    await ensureWorker(fwModelName(modelId));
+  } catch (e) {
+    console.log('[stt] falha ao iniciar o worker:', e instanceof Error ? e.message : String(e));
+    throw e;
   }
 
   const wavPath = path.join(tmpDir(), `stt-${process.hrtime.bigint()}.wav`);
   fs.writeFileSync(wavPath, encodeWav(pcm, sampleRate));
-
-  const threads = Math.max(2, Math.min(8, Math.floor(os.cpus().length / 2)));
-  const lang = language && language !== 'auto' ? language : 'auto';
-  // -bs 1 -bo 1 = greedy: ~5x mais rápido que beam search, qualidade equivalente para fala.
-  const args = [
-    '-m', modelPath, '-f', wavPath, '-l', lang,
-    '-nt', '-t', String(threads), '-bs', '1', '-bo', '1',
-  ];
-
-  const binDir = path.dirname(bin);
-  const env = { ...process.env };
-  if (process.platform === 'linux') {
-    // O tarball do Linux traz as .so junto do binário.
-    env.LD_LIBRARY_PATH = `${binDir}${path.delimiter}${env.LD_LIBRARY_PATH ?? ''}`;
-  }
-
   try {
     return await new Promise<string>((resolve, reject) => {
-      const p = spawn(bin, args, { windowsHide: true, cwd: binDir, env });
-      activeChildren.add(p);
-      let out = '';
-      let err = '';
-      p.stdout?.on('data', (c) => (out += c));
-      p.stderr?.on('data', (c) => (err += c));
-      p.on('error', reject);
-      const timer = setTimeout(() => {
-        try {
-          p.kill();
-        } catch {
-          /* ignore */
-        }
-        reject(new Error('Whisper: timeout de 120s na transcrição.'));
-      }, 120_000);
-      p.on('exit', (code) => {
-        clearTimeout(timer);
-        activeChildren.delete(p);
-        if (code === 0) resolve(cleanTranscript(out));
-        // Cancelado ao parar a captura (killed por sinal → code null): não é erro.
-        else if (code === null && (p as ChildProcess & { __stopped?: boolean }).__stopped) resolve('');
-        else reject(new Error(`whisper saiu com código ${code}: ${err.slice(-300)}`));
-      });
+      queue.push({ wav: wavPath, language: language || 'auto', resolve, reject });
+      dispatch();
     });
   } finally {
     fs.rm(wavPath, { force: true }, () => {});
   }
 }
 
-/** Cancela qualquer transcrição em andamento (chamado ao parar a captura). */
-export function stopWhisper(): void {
-  for (const p of activeChildren) {
-    (p as ChildProcess & { __stopped?: boolean }).__stopped = true;
-    try {
-      p.kill();
-    } catch {
-      /* ignore */
-    }
+/**
+ * Pré-carrega o modelo no worker (sem transcrever), para o 1º trecho não pagar
+ * o tempo de importar o faster-whisper + carregar o modelo (~30-50s na 1ª vez).
+ * Emite progresso via whisperSetupProgress (a UI mostra "Carregando modelo…").
+ */
+export async function warmup(modelId: string): Promise<void> {
+  if (!fasterWhisperInstalled()) return;
+  try {
+    await ensureWorker(fwModelName(modelId));
+    emitProgress({ stage: 'done', message: 'Modelo de voz pronto.', done: true });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    emitProgress({ stage: 'error', message: msg, done: true, error: msg });
   }
-  activeChildren.clear();
+}
+
+/** Para a captura: descarta a fila (o modelo fica carregado p/ a próxima). */
+export function stopWhisper(): void {
+  while (queue.length) {
+    const job = queue.shift()!;
+    job.resolve(''); // cancelado, sem erro
+  }
+}
+
+/** Encerra de vez o worker de STT (ao fechar o app). */
+export function shutdownWhisper(): void {
+  stopWhisper();
+  if (worker) {
+    try { worker.proc.kill(); } catch { /* ignore */ }
+    worker = null;
+  }
 }

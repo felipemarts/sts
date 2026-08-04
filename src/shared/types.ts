@@ -98,6 +98,7 @@ export const IPC = {
   modelRemove: 'model:remove',
   modelProgress: 'model:progress', // evento main -> renderer
   whisperTranscribe: 'whisper:transcribe',
+  whisperWarmup: 'whisper:warmup', // pré-carrega o modelo no worker
   whisperStop: 'whisper:stop',
   whisperSetup: 'whisper:setup', // baixa o binário whisper.cpp (Win/Linux)
   whisperSetupProgress: 'whisper:setup:progress', // evento main -> renderer

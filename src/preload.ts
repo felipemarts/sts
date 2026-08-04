@@ -25,6 +25,7 @@ const api: StsApi = {
       ipcRenderer.invoke(IPC.whisperTranscribe, pcm, sampleRate, language),
     stop: () => ipcRenderer.invoke(IPC.whisperStop),
     setup: () => ipcRenderer.invoke(IPC.whisperSetup),
+    warmup: () => ipcRenderer.invoke(IPC.whisperWarmup),
     onSetupProgress: (cb) => subscribe<SetupProgress>(IPC.whisperSetupProgress, cb),
   },
   tts: {

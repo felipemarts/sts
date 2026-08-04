@@ -10,6 +10,7 @@ import {
 import { whisperModelsDir, piperVoicesDir } from '../paths';
 import { downloadFile } from '../util';
 import { findVoice, findWhisper, getCatalog } from './catalog';
+import { sttModelCached, sttModelCacheDir, downloadSttModel } from '../engines/whisper';
 
 export function whisperModelPath(file: string): string {
   return path.join(whisperModelsDir(), file);
@@ -28,7 +29,7 @@ export function installStatus(): InstallStatus {
   const status: InstallStatus = {};
   const cat = getCatalog();
   for (const m of cat.whisper) {
-    status[m.id] = fs.existsSync(whisperModelPath(m.file));
+    status[m.id] = sttModelCached(m.id); // modelo CT2 do faster-whisper no cache
   }
   for (const v of cat.piper) {
     status[v.id] =
@@ -48,8 +49,9 @@ export async function downloadModel(kind: ModelKind, id: string): Promise<void> 
     if (kind === 'whisper') {
       const m = findWhisper(id);
       if (!m) throw new Error(`Modelo whisper desconhecido: ${id}`);
-      await downloadFile(m.url, whisperModelPath(m.file), (r, t) =>
-        emitProgress({ kind, id, receivedBytes: r, totalBytes: t || m.sizeBytes, done: false }),
+      // faster-whisper baixa o modelo CT2 (garante o venv Python antes).
+      await downloadSttModel(id, (r) =>
+        emitProgress({ kind, id, receivedBytes: r, totalBytes: m.sizeBytes, done: false }),
       );
     } else {
       const v = findVoice(id);
@@ -83,8 +85,11 @@ export function removeModel(kind: ModelKind, id: string): void {
     }
   };
   if (kind === 'whisper') {
-    const m = findWhisper(id);
-    if (m) rm(whisperModelPath(m.file));
+    try {
+      fs.rmSync(sttModelCacheDir(id), { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   } else {
     const v = findVoice(id);
     if (v) {

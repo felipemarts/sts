@@ -44,7 +44,8 @@ export interface StsApi {
   whisper: {
     transcribe(pcm: ArrayBuffer, sampleRate: number, language?: string): Promise<string>;
     stop(): Promise<void>;
-    setup(): Promise<void>; // baixa o binário whisper.cpp (Win/Linux)
+    setup(): Promise<void>; // instala o venv Python + faster-whisper
+    warmup(): Promise<void>; // pré-carrega o modelo no worker
     onSetupProgress(cb: (p: SetupProgress) => void): () => void;
   };
   /** Leitura de texto — motor Edge (online) ou Piper (local). */

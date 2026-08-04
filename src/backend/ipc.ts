@@ -23,6 +23,7 @@ import {
   stopWhisper,
   whisperStatus,
   installWhisperBinary,
+  warmup as warmupWhisper,
 } from './engines/whisper';
 import { synth } from './engines/piper';
 import { synthEdge, listEdgeVoices } from './engines/edgeTts';
@@ -68,15 +69,17 @@ export function registerIpc(): void {
     IPC.whisperTranscribe,
     async (_e, pcm: ArrayBuffer, sampleRate: number, language?: string) => {
       const s = getSettings();
-      const model = s.whisperModel ? findWhisper(s.whisperModel) : undefined;
-      if (!model) throw new Error('Nenhum modelo Whisper selecionado.');
-      const modelPath = whisperModelPath(model.file);
+      if (!s.whisperModel) throw new Error('Nenhum modelo Whisper selecionado.');
       const samples = new Float32Array(pcm);
-      return transcribe(modelPath, samples, sampleRate, language ?? s.whisperLanguage);
+      return transcribe(s.whisperModel, samples, sampleRate, language ?? s.whisperLanguage);
     },
   );
   ipcMain.handle(IPC.whisperStop, () => stopWhisper());
   ipcMain.handle(IPC.whisperSetup, () => installWhisperBinary());
+  ipcMain.handle(IPC.whisperWarmup, () => {
+    const s = getSettings();
+    if (s.whisperModel) warmupWhisper(s.whisperModel);
+  });
 
   // Salva um texto (ex.: transcrição) num .txt escolhido pelo usuário.
   ipcMain.handle(

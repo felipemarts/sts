@@ -109,3 +109,32 @@ export function hfCacheDir(): string {
 export function cloneWorkerPath(): string {
   return path.join(cloneDir(), 'clone_worker.py');
 }
+
+// --- STT via faster-whisper (venv Python + cache CT2) ---
+// O whisper.cpp (binário não-assinado) é bloqueado pelo Smart App Control em
+// algumas máquinas; o faster-whisper roda no Python assinado do sistema e usa o
+// ctranslate2 (wheel amplamente distribuído que o SAC aceita).
+
+export function sttDir(): string {
+  return ensureDir(path.join(userDataDir(), 'stt-py'));
+}
+
+export function sttVenvDir(): string {
+  return path.join(sttDir(), 'venv');
+}
+
+export function sttVenvPython(): string {
+  return process.platform === 'win32'
+    ? path.join(sttVenvDir(), 'Scripts', 'python.exe')
+    : path.join(sttVenvDir(), 'bin', 'python');
+}
+
+/** Cache do HuggingFace para os modelos CT2 do faster-whisper. */
+export function sttHfCacheDir(): string {
+  return ensureDir(path.join(sttDir(), 'hf-cache'));
+}
+
+/** Script do worker Python de STT, escrito em runtime. */
+export function sttWorkerPath(): string {
+  return path.join(sttDir(), 'stt_worker.py');
+}
