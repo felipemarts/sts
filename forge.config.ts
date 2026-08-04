@@ -11,6 +11,10 @@ const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
     appBundleId: 'com.felipemarts.sts',
+    // Binário em minúsculo: os makers .deb/.rpm (Linux) procuram o binário pelo
+    // `name` do package.json ("sts"), mas o productName é "STS". Sem isto, o
+    // build Linux falha: "could not find the Electron app binary ... /sts".
+    executableName: 'sts',
     // Ícone do app embutido no executável/bundle (packager escolhe .ico/.icns).
     icon: './assets/icon',
     // Copia o PNG para resources/ para o BrowserWindow usar em runtime (Linux/janela).
