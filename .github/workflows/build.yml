@@ -69,9 +69,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          files=$(find artifacts -type f)
-          echo "Anexando:"; echo "$files"
-          gh release create "${GITHUB_REF_NAME}" $files \
+          # Cria o release e anexa os arquivos separadamente. O instalador do
+          # Windows tem ESPAÇO no nome ("STS-x.y.z Setup.exe"), então NÃO dá para
+          # passar $files sem aspas (quebra por espaço). find -exec passa cada
+          # caminho como argumento próprio (à prova de espaço).
+          echo "Anexando:"; find artifacts -type f
+          gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "STS ${GITHUB_REF_NAME}" \
             --generate-notes
+          find artifacts -type f -exec gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber {} +
