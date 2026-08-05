@@ -1,4 +1,8 @@
-import type { ForgeConfig } from '@electron-forge/shared-types';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
+import type { ForgeConfig, ForgeHookMap } from '@electron-forge/shared-types';
+import { PluginBase } from '@electron-forge/plugin-base';
+import { productName } from './package.json';
 import { MakerSquirrel } from '@electron-forge/maker-squirrel';
 import { MakerZIP } from '@electron-forge/maker-zip';
 import { MakerDeb } from '@electron-forge/maker-deb';
@@ -6,6 +10,44 @@ import { MakerRpm } from '@electron-forge/maker-rpm';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
+
+// Plugin mínimo que re-assina o .app ad-hoc DEPOIS do FusesPlugin.
+//
+// Por que: o `resetAdHocDarwinSignature` do FusesPlugin assina de um jeito que
+// deixa o Info.plist fora do selo ("Info.plist=not bound"), então o bundle sai
+// com assinatura inválida:
+//   $ spctl -a -vvv STS.app
+//   STS.app: invalid Info.plist (plist or signature have been modified)
+// Na máquina do usuário, um app baixado (com quarentena) + assinatura inválida
+// = "O app está danificado e não pode ser aberto. Mova para o Lixo." — e nem o
+// "Abrir mesmo assim" resolve. Com uma assinatura ad-hoc VÁLIDA o Gatekeeper
+// volta a oferecer o caminho normal de abrir um app sem notarização.
+//
+// Hooks do `hooks:` do config rodam ANTES dos hooks dos plugins, por isso isto
+// é um plugin: hooks de plugin rodam na ordem do array `plugins`, então aqui
+// (depois do FusesPlugin) a re-assinatura é a última coisa a tocar o bundle.
+class ResignDarwinAdHocPlugin extends PluginBase<Record<string, never>> {
+  name = 'resign-darwin-adhoc';
+
+  getHooks(): ForgeHookMap {
+    return {
+      postPackage: async (_config, result) => {
+        if (result.platform !== 'darwin') return;
+        for (const outputPath of result.outputPaths) {
+          const app = join(outputPath, `${productName}.app`);
+          execFileSync('codesign', ['--force', '--deep', '--sign', '-', app], {
+            stdio: 'inherit',
+          });
+          // Falha o build se a assinatura não ficar válida — melhor quebrar
+          // aqui do que publicar um .zip que o macOS recusa a abrir.
+          execFileSync('codesign', ['--verify', '--deep', '--strict', app], {
+            stdio: 'inherit',
+          });
+        }
+      },
+    };
+  }
+}
 
 const config: ForgeConfig = {
   packagerConfig: {
@@ -80,6 +122,8 @@ const config: ForgeConfig = {
       [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
       [FuseV1Options.OnlyLoadAppFromAsar]: true,
     }),
+    // DEVE vir depois do FusesPlugin (ver comentário acima).
+    new ResignDarwinAdHocPlugin({}),
   ],
 };
 

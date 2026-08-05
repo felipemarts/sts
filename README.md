@@ -22,6 +22,30 @@ na pasta `userData` — nada é instalado no sistema nem versionado no repositó
 - ⚙ **Gerenciador de modelos** — baixa, guarda e remove modelos Whisper e vozes
   Piper (vários idiomas) pela própria interface.
 
+## Instalando a partir de um release
+
+Baixe o pacote da sua plataforma em
+[Releases](https://github.com/felipemarts/sts/releases).
+
+### macOS — primeira abertura
+
+O app é assinado **ad-hoc** (sem Apple Developer ID, sem notarização), então o
+Gatekeeper bloqueia a primeira abertura de um `.zip` baixado da internet. Depois
+de descompactar e mover o `STS.app` para `/Applications`, remova a quarentena:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/STS.app
+```
+
+Alternativa sem terminal: tente abrir, então vá em **Ajustes do Sistema ›
+Privacidade e Segurança** e clique em **Abrir mesmo assim**.
+
+> Se você baixou o **0.2.0**, ele saiu com a assinatura corrompida e o macOS
+> dizia que o app estava _danificado_ — nesse caso nem o "Abrir mesmo assim"
+> funcionava. Corrigido a partir do **0.2.1**; baixe a versão nova.
+
+Windows e Linux não precisam de nenhum passo extra.
+
 ## Pré-requisitos
 
 - **Node.js 18+** e npm (só para desenvolvimento).
