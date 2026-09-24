@@ -1,12 +1,12 @@
 /**
  * Ambiente Python embutido + setup dos motores que dependem dele (Piper e
- * Chatterbox).
+ * faster-whisper).
  *
  * O app NÃO depende de nenhum Python instalado no sistema: quando o usuário
- * pede para instalar o Piper ou a Clonagem, baixamos um Python 3.11 relocável
+ * pede para instalar o Piper ou o Whisper, baixamos um Python 3.11 relocável
  * (python-build-standalone — a mesma base usada pelo `uv`) para a pasta userData
  * e criamos os venvs a partir dele. Um único runtime serve os dois motores
- * (venvs separados: o do Piper é leve; o da clonagem puxa o PyTorch, ~2–3 GB).
+ * (venvs separados e leves).
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,8 +16,6 @@ import { IPC, SetupProgress } from '../shared/types';
 import {
   venvDir,
   venvPython,
-  cloneVenvDir,
-  cloneVenvPython,
   sttVenvDir,
   sttVenvPython,
   embeddedPython,
@@ -58,9 +56,9 @@ export function pythonRuntimeReady(): boolean {
  * Python "confiável" do sistema (assinado pela PSF — o Smart App Control do
  * Windows o aceita). O python-build-standalone embutido traz .pyd obscuras como
  * `_lzma.pyd` que o SAC BLOQUEIA ("Uma política de Controle de Aplicativo
- * bloqueou este arquivo"), quebrando a clonagem. Preferimos, então, um Python
- * do sistema quando existir: 3.12 → 3.11 → 3.10 (evitamos 3.13+ por falta de
- * wheels do torch). Retorna null se não houver — aí caímos no embutido.
+ * bloqueou este arquivo"), quebrando os venvs. Preferimos, então, um Python
+ * do sistema quando existir: 3.12 → 3.11 → 3.10. Retorna null se não houver —
+ * aí caímos no embutido.
  */
 export function systemTrustedPython(): string | null {
   const local = process.env.LOCALAPPDATA;
@@ -160,20 +158,6 @@ export function piperInstalled(): Promise<boolean> {
   return new Promise((resolve) => {
     if (!venvReady()) return resolve(false);
     const p = spawn(venvPython(), ['-c', 'import piper'], { windowsHide: true });
-    p.on('error', () => resolve(false));
-    p.on('exit', (code) => resolve(code === 0));
-  });
-}
-
-export function cloneVenvReady(): boolean {
-  return fs.existsSync(cloneVenvPython());
-}
-
-/** true se o pacote chatterbox é importável no venv de clonagem. */
-export function chatterboxInstalled(): Promise<boolean> {
-  return new Promise((resolve) => {
-    if (!cloneVenvReady()) return resolve(false);
-    const p = spawn(cloneVenvPython(), ['-c', 'import chatterbox'], { windowsHide: true });
     p.on('error', () => resolve(false));
     p.on('exit', (code) => resolve(code === 0));
   });
@@ -315,69 +299,6 @@ export async function setupSttEnv(): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     emitStt({ stage: 'error', message: msg, done: true, error: msg });
-    throw err;
-  }
-}
-
-// ------------------------------- Clonagem (Chatterbox) -------------------------------
-
-function emitClone(p: SetupProgress) {
-  for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send(IPC.cloneSetupProgress, p);
-  }
-}
-
-/**
- * Cria o venv de clonagem (a partir do Python 3.11 embutido) e instala
- * chatterbox-tts (+ PyTorch). Pesado. Idempotente.
- */
-export async function setupCloneEnv(): Promise<void> {
-  try {
-    const py = await ensureBasePython(emitClone);
-
-    // Migração importante: o venv criado do Python embutido tem o _lzma.pyd
-    // bloqueado pelo Smart App Control (quebra o import do chatterbox). Se há um
-    // Python do sistema (assinado), recria o venv com ele.
-    if (systemTrustedPython() && cloneVenvReady() && venvIsEmbedded(cloneVenvDir())) {
-      emitClone({
-        stage: 'venv',
-        message: 'Recriando o ambiente com o Python do sistema (corrige o bloqueio do Windows). Vai reinstalar as dependências…',
-        done: false,
-      });
-      fs.rmSync(cloneVenvDir(), { recursive: true, force: true });
-    }
-    if (!cloneVenvReady()) {
-      emitClone({ stage: 'venv', message: 'Criando ambiente Python isolado…', done: false });
-      await run(py, ['-m', 'venv', cloneVenvDir()], 'Criação do venv de clonagem');
-    }
-
-    // setuptools<80 é necessário: o resemble-perth (do chatterbox) importa
-    // pkg_resources, removido do setuptools 81+. A versão 79.x ainda o fornece.
-    emitClone({ stage: 'pip', message: 'Atualizando pip e setuptools…', done: false });
-    await run(
-      cloneVenvPython(),
-      ['-m', 'pip', 'install', '--upgrade', 'pip', 'setuptools<80'],
-      'Atualização do pip/setuptools',
-    );
-
-    if (!(await chatterboxInstalled())) {
-      emitClone({
-        stage: 'chatterbox',
-        message: 'Instalando chatterbox-tts + PyTorch (~2–3 GB, pode levar vários minutos)…',
-        done: false,
-      });
-      await run(
-        cloneVenvPython(),
-        ['-m', 'pip', 'install', 'chatterbox-tts'],
-        'Instalação do chatterbox-tts',
-        (line) => emitClone({ stage: 'chatterbox', message: line, done: false }),
-      );
-    }
-
-    emitClone({ stage: 'done', message: 'Clonagem pronta.', done: true });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    emitClone({ stage: 'error', message: msg, done: true, error: msg });
     throw err;
   }
 }

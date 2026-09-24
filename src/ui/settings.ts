@@ -78,9 +78,12 @@ export function createSettingsTab(onModelsChanged: () => void): Tab {
 
   // ---- Whisper model selection ----
   const modelSelect = el('select', {}, []) as HTMLSelectElement;
-  modelSelect.addEventListener('change', () =>
-    window.sts.settings.set({ whisperModel: modelSelect.value || null }),
-  );
+  const modelHint = el('div', { class: 'hint' });
+  modelSelect.addEventListener('change', async () => {
+    await window.sts.settings.set({ whisperModel: modelSelect.value || null });
+    // Avisa as outras abas: a de Escutar recarrega o modelo no worker.
+    onModelsChanged();
+  });
 
   // ---- Model manager lists ----
   const whisperList = el('div', {});
@@ -95,13 +98,23 @@ export function createSettingsTab(onModelsChanged: () => void): Tab {
 
     actionBtn.addEventListener('click', async () => {
       const installed = pill.classList.contains('ok');
+      err.textContent = '';
       if (installed) {
-        await window.sts.models.remove(kind, id);
-        setInstalled(id, false);
-        onModelsChanged();
+        // Nunca assumir que removeu: o backend devolve o status real do disco.
+        // (Antes a UI marcava "Não baixado" mesmo quando o unlink falhava.)
+        actionBtn.disabled = true;
+        actionBtn.textContent = 'Removendo…';
+        try {
+          const status = await window.sts.models.remove(kind, id);
+          applyStatus(status);
+          await refreshModelSelect();
+          onModelsChanged();
+        } catch (e) {
+          err.textContent = e instanceof Error ? e.message : String(e);
+          setInstalled(id, true);
+        }
       } else {
         actionBtn.disabled = true;
-        err.textContent = '';
         barWrap.style.display = 'block';
         bar.style.width = '0%';
         try {
@@ -137,6 +150,15 @@ export function createSettingsTab(onModelsChanged: () => void): Tab {
     r.barWrap.style.display = 'none';
   }
 
+  /** Aplica em todas as linhas o status vindo do backend (fonte da verdade). */
+  function applyStatus(status: Record<string, boolean>) {
+    for (const id of rows.keys()) setInstalled(id, !!status[id]);
+  }
+
+  async function syncStatus() {
+    applyStatus(await window.sts.models.status());
+  }
+
   window.sts.models.onProgress((p) => {
     const r = rows.get(p.id);
     if (!r) return;
@@ -147,9 +169,9 @@ export function createSettingsTab(onModelsChanged: () => void): Tab {
       return;
     }
     if (p.done) {
-      setInstalled(p.id, true);
-      refreshModelSelect();
-      onModelsChanged();
+      syncStatus()
+        .then(() => refreshModelSelect())
+        .then(() => onModelsChanged());
     } else {
       const pct = p.totalBytes ? (p.receivedBytes / p.totalBytes) * 100 : 0;
       r.bar.style.width = `${pct.toFixed(1)}%`;
@@ -214,18 +236,25 @@ export function createSettingsTab(onModelsChanged: () => void): Tab {
     const status = await window.sts.models.status();
     modelSelect.innerHTML = '';
     const installed = cat.whisper.filter((m) => status[m.id]);
+    modelSelect.disabled = installed.length === 0;
     if (installed.length === 0) {
       modelSelect.append(el('option', { value: '' }, ['(baixe um modelo abaixo)']));
-    } else {
-      for (const m of installed) modelSelect.append(el('option', { value: m.id }, [m.label]));
-      if (s.whisperModel && installed.some((m) => m.id === s.whisperModel)) {
-        modelSelect.value = s.whisperModel;
-      } else {
-        // seleciona o primeiro instalado por padrão
-        modelSelect.value = installed[0].id;
-        window.sts.settings.set({ whisperModel: installed[0].id });
-      }
+      modelHint.textContent = 'Nenhum modelo baixado ainda — baixe um na lista abaixo.';
+      if (s.whisperModel) await window.sts.settings.set({ whisperModel: null });
+      return;
     }
+    for (const m of installed) modelSelect.append(el('option', { value: m.id }, [m.label]));
+    if (s.whisperModel && installed.some((m) => m.id === s.whisperModel)) {
+      modelSelect.value = s.whisperModel;
+    } else {
+      // seleciona o primeiro instalado por padrão
+      modelSelect.value = installed[0].id;
+      await window.sts.settings.set({ whisperModel: installed[0].id });
+    }
+    modelHint.textContent =
+      installed.length > 1
+        ? `${installed.length} modelos baixados — a troca vale já na próxima transcrição.`
+        : '';
   }
 
   async function buildLists() {
@@ -277,17 +306,28 @@ export function createSettingsTab(onModelsChanged: () => void): Tab {
     el('div', { class: 'card' }, [
       el('h3', {}, ['Modelo de transcrição ativo']),
       el('div', { class: 'row' }, [el('label', { class: 'field' }, ['Whisper', modelSelect])]),
+      modelHint,
     ]),
 
     el('div', { class: 'card' }, [el('h3', {}, ['Modelos Whisper (STT)']), whisperList]),
     el('div', { class: 'card' }, [el('h3', {}, ['Vozes Piper (TTS)']), piperList]),
   ]);
 
+  // Cada etapa é independente: uma falha (ex.: enumerateDevices negado) não
+  // pode impedir que a lista de modelos e o seletor sejam montados.
+  const step = async (name: string, fn: () => Promise<void>) => {
+    try {
+      await fn();
+    } catch (e) {
+      console.error(`[settings] falha em ${name}:`, e);
+    }
+  };
+
   const refresh = async () => {
-    await buildLists();
-    await refreshEngines();
-    await refreshMics();
-    await refreshModelSelect();
+    await step('buildLists', buildLists);
+    await step('refreshModelSelect', refreshModelSelect);
+    await step('refreshEngines', refreshEngines);
+    await step('refreshMics', refreshMics);
   };
 
   return { element, refresh };

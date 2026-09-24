@@ -21,13 +21,6 @@ export interface ExportResult {
   path?: string;
 }
 
-export interface CloneEnsure {
-  pythonRuntimeReady: boolean; // Python 3.11 embutido já baixado
-  venvReady: boolean;
-  installed: boolean; // chatterbox importável no venv
-  hasReference: boolean; // já existe uma amostra de referência salva
-}
-
 /** Superfície exposta ao renderer via contextBridge (window.sts). */
 export interface StsApi {
   settings: {
@@ -38,7 +31,8 @@ export interface StsApi {
   models: {
     status(): Promise<InstallStatus>;
     download(kind: ModelKind, id: string): Promise<void>;
-    remove(kind: ModelKind, id: string): Promise<void>;
+    /** Remove do disco; lança se falhar. Retorna o status atualizado. */
+    remove(kind: ModelKind, id: string): Promise<InstallStatus>;
     onProgress(cb: (p: DownloadProgress) => void): () => void;
   };
   whisper: {
@@ -59,16 +53,6 @@ export interface StsApi {
     ensure(): Promise<PiperEnsure>;
     setup(): Promise<void>;
     onSetupProgress(cb: (p: SetupProgress) => void): () => void;
-  };
-  clone: {
-    ensure(): Promise<CloneEnsure>;
-    setup(): Promise<void>;
-    onSetupProgress(cb: (p: SetupProgress) => void): () => void;
-    saveReference(pcm: ArrayBuffer, sampleRate: number): Promise<string>;
-    synth(text: string, language: string): Promise<Uint8Array>;
-    synthSegment(text: string, language: string): Promise<Uint8Array>;
-    stop(): Promise<void>; // cancela a geração (mata os workers)
-    export(text: string, language: string): Promise<ExportResult>;
   };
   engines: {
     status(): Promise<EngineStatus>;

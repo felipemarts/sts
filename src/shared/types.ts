@@ -66,9 +66,6 @@ export interface Settings {
   ttsVolume: number; // 0..1 (ganho no playback)
   vadThreshold: number; // limiar de energia RMS (0..1)
   vadHangoverMs: number; // silêncio para encerrar um segmento de fala
-  cloneLanguage: string; // idioma da síntese clonada (ex.: "pt")
-  cloneRefPath: string | null; // WAV de referência atual (amostra gravada)
-  clonePoolSize: number; // 1..3 workers de clonagem em paralelo (~2-3GB RAM cada)
 }
 
 export interface EngineStatus {
@@ -111,14 +108,6 @@ export const IPC = {
   saveText: 'file:saveText', // salva texto (ex.: transcrição) em .txt
   saveAudio: 'file:saveAudio', // salva bytes de áudio já gerados (WAV/MP3)
   clipboardWrite: 'clipboard:write', // copia texto (módulo nativo do Electron)
-  cloneEnsure: 'clone:ensure',
-  cloneSetup: 'clone:setup',
-  cloneSetupProgress: 'clone:setup:progress', // evento main -> renderer
-  cloneSaveReference: 'clone:saveReference',
-  cloneSynth: 'clone:synth',
-  cloneSynthSegment: 'clone:synthSegment', // sintetiza uma frase (via pool)
-  cloneStop: 'clone:stop', // cancela a geração (mata os workers do pool)
-  cloneExport: 'clone:export',
   saveWavFromPcm: 'file:saveWavPcm', // salva PCM float32 concatenado como WAV
   enginesStatus: 'engines:status',
 } as const;

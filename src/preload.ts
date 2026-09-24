@@ -40,17 +40,6 @@ const api: StsApi = {
     setup: () => ipcRenderer.invoke(IPC.piperSetup),
     onSetupProgress: (cb) => subscribe<SetupProgress>(IPC.piperSetupProgress, cb),
   },
-  clone: {
-    ensure: () => ipcRenderer.invoke(IPC.cloneEnsure),
-    setup: () => ipcRenderer.invoke(IPC.cloneSetup),
-    onSetupProgress: (cb) => subscribe<SetupProgress>(IPC.cloneSetupProgress, cb),
-    saveReference: (pcm, sampleRate) =>
-      ipcRenderer.invoke(IPC.cloneSaveReference, pcm, sampleRate),
-    synth: (text, language) => ipcRenderer.invoke(IPC.cloneSynth, text, language),
-    synthSegment: (text, language) => ipcRenderer.invoke(IPC.cloneSynthSegment, text, language),
-    stop: () => ipcRenderer.invoke(IPC.cloneStop),
-    export: (text, language) => ipcRenderer.invoke(IPC.cloneExport, text, language),
-  },
   engines: {
     status: () => ipcRenderer.invoke(IPC.enginesStatus),
   },

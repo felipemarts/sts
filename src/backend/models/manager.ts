@@ -10,7 +10,7 @@ import {
 import { whisperModelsDir, piperVoicesDir } from '../paths';
 import { downloadFile } from '../util';
 import { findVoice, findWhisper, getCatalog } from './catalog';
-import { sttModelCached, sttModelCacheDir, downloadSttModel } from '../engines/whisper';
+import { sttModelCached, removeSttModel, downloadSttModel } from '../engines/whisper';
 
 export function whisperModelPath(file: string): string {
   return path.join(whisperModelsDir(), file);
@@ -76,25 +76,18 @@ export async function downloadModel(kind: ModelKind, id: string): Promise<void> 
   }
 }
 
-export function removeModel(kind: ModelKind, id: string): void {
-  const rm = (p: string) => {
-    try {
-      fs.rmSync(p, { force: true });
-    } catch {
-      /* ignore */
-    }
-  };
+/**
+ * Apaga um modelo/voz do disco. Propaga o erro em vez de engolir: antes a
+ * falha era silenciosa e a UI dizia "removido" com o modelo ainda no disco.
+ */
+export async function removeModel(kind: ModelKind, id: string): Promise<void> {
   if (kind === 'whisper') {
-    try {
-      fs.rmSync(sttModelCacheDir(id), { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
-  } else {
-    const v = findVoice(id);
-    if (v) {
-      rm(voiceOnnxPath(v.file));
-      rm(voiceConfigPath(v.file));
-    }
+    await removeSttModel(id);
+    return;
+  }
+  const v = findVoice(id);
+  if (!v) return;
+  for (const p of [voiceOnnxPath(v.file), voiceConfigPath(v.file)]) {
+    fs.rmSync(p, { force: true, maxRetries: 3, retryDelay: 200 });
   }
 }

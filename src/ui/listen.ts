@@ -74,6 +74,9 @@ export function createListenTab(goToSettings: () => void): Tab {
   let handle: CaptureHandle | null = null;
   let queue: Promise<void> = Promise.resolve();
   let pending = 0;
+  // "Limpar" incrementa a época: trechos enfileirados (e o que já estiver no
+  // worker) passam a pertencer a uma época velha e são descartados.
+  let epoch = 0;
   let gotChunk = false;
   let maxLevel = 0;
   let signalTimer: ReturnType<typeof setTimeout> | null = null;
@@ -124,6 +127,7 @@ export function createListenTab(goToSettings: () => void): Tab {
     fileBusy = true;
     uploadBtn.disabled = true;
     uploadBtn.textContent = '⏳  Lendo áudio…';
+    const myEpoch = epoch;
     const actx = new AudioContext();
     try {
       const arr = await file.arrayBuffer();
@@ -131,16 +135,19 @@ export function createListenTab(goToSettings: () => void): Tab {
       const pcm16 = resampleTo16k(toMono(audio), audio.sampleRate);
       const CH = 16000 * 30; // blocos de 30s (janela nativa do Whisper)
       const total = Math.max(1, Math.ceil(pcm16.length / CH));
-      for (let i = 0; i < total; i++) {
+      for (let i = 0; i < total && myEpoch === epoch; i++) {
         working.textContent = `● transcrevendo arquivo — bloco ${i + 1}/${total}…`;
         const copy = pcm16.slice(i * CH, Math.min((i + 1) * CH, pcm16.length));
         const text = await window.sts.whisper.transcribe(copy.buffer as ArrayBuffer, 16000, langSelect.value);
+        if (myEpoch !== epoch) break; // "Limpar" abortou o restante do arquivo
         if (text) appendText(text);
       }
-      working.textContent = '';
+      if (myEpoch === epoch) working.textContent = '';
     } catch (err) {
-      errorBox.textContent = 'Falha ao transcrever o arquivo: ' + (err instanceof Error ? err.message : String(err));
-      working.textContent = '';
+      if (myEpoch === epoch) {
+        errorBox.textContent = 'Falha ao transcrever o arquivo: ' + (err instanceof Error ? err.message : String(err));
+        working.textContent = '';
+      }
     } finally {
       try { await actx.close(); } catch { /* ignore */ }
       fileBusy = false;
@@ -150,23 +157,40 @@ export function createListenTab(goToSettings: () => void): Tab {
   }
 
   const enqueue = (pcm: Float32Array, sampleRate: number) => {
+    const myEpoch = epoch;
     pending++;
     render();
     queue = queue.then(async () => {
+      if (myEpoch !== epoch) return; // limpo antes de sair da fila
       try {
         const text = await window.sts.whisper.transcribe(
           pcm.buffer as ArrayBuffer,
           sampleRate,
           langSelect.value,
         );
+        if (myEpoch !== epoch) return; // limpo enquanto transcrevia
         if (text) appendText(text);
       } catch (err) {
-        errorBox.textContent = err instanceof Error ? err.message : String(err);
+        if (myEpoch === epoch) errorBox.textContent = err instanceof Error ? err.message : String(err);
       } finally {
-        pending--;
-        render();
+        if (myEpoch === epoch) {
+          pending--;
+          render();
+        }
       }
     });
+  };
+
+  /** Descarta tudo que estiver na fila (renderer + main) sem parar a captura. */
+  const clearQueue = () => {
+    epoch++;
+    pending = 0;
+    queue = Promise.resolve();
+    window.sts.whisper.stop().catch(() => {
+      /* nada a cancelar */
+    });
+    working.textContent = '';
+    render();
   };
 
   const stop = async () => {
@@ -254,7 +278,7 @@ export function createListenTab(goToSettings: () => void): Tab {
     transcript.value = '';
     errorBox.textContent = '';
     savedHint.textContent = '';
-    render();
+    clearQueue();
   });
   copyBtn.addEventListener('click', async () => {
     await window.sts.copyText(transcript.value);

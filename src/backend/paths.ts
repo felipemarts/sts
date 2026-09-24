@@ -46,8 +46,8 @@ export function pythonDir(): string {
 /**
  * Raiz onde o Python 3.11 embutido (python-build-standalone) é extraído.
  * O arquivo `install_only` extrai para uma subpasta `python/`. Esse interpretador
- * é a base tanto do venv do Piper quanto do venv da clonagem — o app não depende
- * de nenhum Python instalado no sistema.
+ * é a base dos venvs do Piper e do STT — o app não depende de nenhum Python
+ * instalado no sistema.
  */
 export function embeddedPythonRoot(): string {
   return path.join(pythonDir(), 'runtime');
@@ -77,37 +77,6 @@ export function settingsFile(): string {
 
 export function tmpDir(): string {
   return ensureDir(path.join(userDataDir(), 'tmp'));
-}
-
-// --- Modo de clonagem de voz (venv Python 3.11 pesado + cache de modelos) ---
-
-export function cloneDir(): string {
-  return ensureDir(path.join(userDataDir(), 'clone'));
-}
-
-export function cloneVenvDir(): string {
-  return path.join(cloneDir(), 'venv');
-}
-
-export function cloneVenvPython(): string {
-  return process.platform === 'win32'
-    ? path.join(cloneVenvDir(), 'Scripts', 'python.exe')
-    : path.join(cloneVenvDir(), 'bin', 'python');
-}
-
-/** WAV de referência atual da clonagem (a amostra gravada pelo microfone). */
-export function cloneRefPath(): string {
-  return path.join(cloneDir(), 'reference.wav');
-}
-
-/** Cache do HuggingFace para os modelos de clonagem (fora de ~/.cache). */
-export function hfCacheDir(): string {
-  return ensureDir(path.join(cloneDir(), 'hf-cache'));
-}
-
-/** Script do worker Python de clonagem, escrito em runtime. */
-export function cloneWorkerPath(): string {
-  return path.join(cloneDir(), 'clone_worker.py');
 }
 
 // --- STT via faster-whisper (venv Python + cache CT2) ---

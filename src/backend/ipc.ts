@@ -7,17 +7,12 @@ import {
   Settings,
   TtsEngine,
 } from '../shared/types';
-import { ExportResult, CloneEnsure, PiperEnsure } from '../shared/api';
+import { ExportResult, PiperEnsure } from '../shared/api';
 import { writeAudio } from './audioExport';
 import { encodeWav } from './util';
 import { getSettings, setSettings } from './settings';
-import { getCatalog, findWhisper, findVoice } from './models/catalog';
-import {
-  downloadModel,
-  installStatus,
-  removeModel,
-  whisperModelPath,
-} from './models/manager';
+import { getCatalog, findVoice } from './models/catalog';
+import { downloadModel, installStatus, removeModel } from './models/manager';
 import {
   transcribe,
   stopWhisper,
@@ -27,17 +22,12 @@ import {
 } from './engines/whisper';
 import { synth } from './engines/piper';
 import { synthEdge, listEdgeVoices } from './engines/edgeTts';
-import { synthClone, synthSegment, stopWorker as stopClone } from './engines/voiceClone';
 import {
   setupPiperEnv,
   venvReady,
   piperInstalled,
-  setupCloneEnv,
   pythonRuntimeReady,
-  cloneVenvReady,
-  chatterboxInstalled,
 } from './pythonEnv';
-import { cloneRefPath } from './paths';
 
 /** Sintetiza um WAV/MP3 com o motor escolhido. Retorna os bytes. */
 async function synthWithEngine(
@@ -59,8 +49,17 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.modelDownload, (_e, kind: ModelKind, id: string) =>
     downloadModel(kind, id),
   );
-  ipcMain.handle(IPC.modelRemove, (_e, kind: ModelKind, id: string) => {
-    removeModel(kind, id);
+  ipcMain.handle(IPC.modelRemove, async (_e, kind: ModelKind, id: string) => {
+    await removeModel(kind, id);
+    // Se o modelo removido era o ativo, escolhe outro instalado (ou nenhum) —
+    // senão o app fica apontando para um modelo que não existe mais.
+    const s = getSettings();
+    if (kind === 'whisper' && s.whisperModel === id) {
+      const status = installStatus();
+      const next = getCatalog().whisper.find((m) => status[m.id])?.id ?? null;
+      setSettings({ whisperModel: next });
+    }
+    return installStatus();
   });
 
   // ------------------------------- Whisper (STT) -------------------------------
@@ -195,56 +194,6 @@ export function registerIpc(): void {
     piperInstalled: await piperInstalled(),
   }));
   ipcMain.handle(IPC.piperSetup, () => setupPiperEnv());
-
-  // ------------------------------- Clonagem de voz -------------------------------
-
-  ipcMain.handle(IPC.cloneEnsure, async (): Promise<CloneEnsure> => ({
-    pythonRuntimeReady: pythonRuntimeReady(),
-    venvReady: cloneVenvReady(),
-    installed: await chatterboxInstalled(),
-    hasReference: fs.existsSync(cloneRefPath()),
-  }));
-
-  ipcMain.handle(IPC.cloneSetup, () => setupCloneEnv());
-
-  ipcMain.handle(
-    IPC.cloneSaveReference,
-    (_e, pcm: ArrayBuffer, sampleRate: number): string => {
-      const wav = encodeWav(new Float32Array(pcm), sampleRate);
-      const dest = cloneRefPath();
-      fs.writeFileSync(dest, wav);
-      setSettings({ cloneRefPath: dest });
-      return dest;
-    },
-  );
-
-  ipcMain.handle(IPC.cloneSynth, async (_e, text: string, language: string) => {
-    return synthClone(text, language); // vira Uint8Array no renderer
-  });
-
-  ipcMain.handle(IPC.cloneSynthSegment, async (_e, text: string, language: string) => {
-    return synthSegment(text, language); // uma frase, via pool
-  });
-  ipcMain.handle(IPC.cloneStop, () => stopClone());
-
-  ipcMain.handle(
-    IPC.cloneExport,
-    async (e, text: string, language: string): Promise<ExportResult> => {
-      const win = BrowserWindow.fromWebContents(e.sender) ?? undefined;
-      const { canceled, filePath } = await dialog.showSaveDialog(win!, {
-        title: 'Salvar áudio (voz clonada)',
-        defaultPath: 'voz-clonada.mp3',
-        filters: [
-          { name: 'MP3', extensions: ['mp3'] },
-          { name: 'WAV', extensions: ['wav'] },
-        ],
-      });
-      if (canceled || !filePath) return { canceled: true };
-      const wav = await synthClone(text, language);
-      await writeAudio(wav, filePath);
-      return { canceled: false, path: filePath };
-    },
-  );
 
   ipcMain.handle(IPC.enginesStatus, async (): Promise<EngineStatus> => ({
     whisper: whisperStatus(),

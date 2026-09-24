@@ -37,18 +37,100 @@ export function fwModelName(id: string): string {
   return FW_NAME[id] ?? id;
 }
 
-/** Diretório do modelo CT2 no cache do HuggingFace. */
-export function sttModelCacheDir(id: string): string {
-  return path.join(sttHfCacheDir(), 'hub', `models--Systran--faster-whisper-${fwModelName(id)}`);
+/**
+ * Org do repositório HuggingFace de cada modelo. A maioria vive em `Systran`,
+ * mas o turbo vive em `mobiuslabsgmbh` — supor "Systran" para todos fazia o app
+ * NUNCA reconhecer o large-v3-turbo como baixado (e, por tabela, nunca
+ * conseguir removê-lo nem selecioná-lo). Mesmo assim, o mapa é só um palpite:
+ * `modelCacheDirs()` também varre o cache atrás de qualquer org, então uma
+ * mudança futura do faster-whisper não volta a quebrar a detecção.
+ */
+const FW_ORG: Record<string, string> = {
+  'large-v3-turbo': 'mobiuslabsgmbh',
+};
+function fwOrg(name: string): string {
+  return FW_ORG[name] ?? 'Systran';
 }
-export function sttModelCached(id: string): boolean {
+
+function hubDir(): string {
+  return path.join(sttHfCacheDir(), 'hub');
+}
+
+/** Diretório "canônico" do modelo CT2 no cache do HuggingFace. */
+export function sttModelCacheDir(id: string): string {
+  const name = fwModelName(id);
+  return path.join(hubDir(), `models--${fwOrg(name)}--faster-whisper-${name}`);
+}
+
+/**
+ * Todos os diretórios de cache (repo + locks) que pertencem a este modelo.
+ * Varre o hub porque a org do repo pode mudar entre versões do faster-whisper.
+ */
+export function sttModelCacheDirs(id: string): string[] {
+  const suffix = `--faster-whisper-${fwModelName(id)}`;
+  const out = new Set<string>();
+  const canonical = sttModelCacheDir(id);
+  if (fs.existsSync(canonical)) out.add(canonical);
+  for (const base of [hubDir(), path.join(hubDir(), '.locks')]) {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(base);
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (e.startsWith('models--') && e.endsWith(suffix)) out.add(path.join(base, e));
+    }
+  }
+  return [...out];
+}
+
+function hasSnapshot(dir: string): boolean {
   // "snapshots" com conteúdo = download concluído (o dir raiz existe cedo demais).
-  const snap = path.join(sttModelCacheDir(id), 'snapshots');
+  const snap = path.join(dir, 'snapshots');
   try {
     return fs.readdirSync(snap).some((s) => fs.readdirSync(path.join(snap, s)).length > 0);
   } catch {
     return false;
   }
+}
+
+export function sttModelCached(id: string): boolean {
+  return sttModelCacheDirs(id).some(hasSnapshot);
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Apaga o modelo do cache. Precisa encerrar o worker antes: enquanto o
+ * ctranslate2 mantém o `model.bin` aberto, o Windows recusa o unlink (EBUSY/
+ * EPERM) — era por isso que "Remover" não removia nada. Lança se sobrar algo,
+ * para a UI conseguir avisar em vez de mentir que apagou.
+ */
+export async function removeSttModel(id: string): Promise<void> {
+  const dirs = sttModelCacheDirs(id);
+  if (!dirs.length) return;
+  if (worker && worker.model === fwModelName(id)) shutdownWhisper();
+
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    lastErr = null;
+    for (const dir of dirs) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    if (!dirs.some((d) => fs.existsSync(d))) return;
+    await sleep(300);
+  }
+
+  const msg = lastErr instanceof Error ? ` (${lastErr.message})` : '';
+  throw new Error(
+    `Não foi possível apagar o modelo — algum processo ainda está usando os arquivos${msg}. ` +
+      'Feche e reabra o app e tente de novo.',
+  );
 }
 
 function dirSize(dir: string): number {
@@ -77,8 +159,16 @@ function dirSize(dir: string): number {
 export async function downloadSttModel(id: string, onBytes: (n: number) => void): Promise<void> {
   await setupSttEnv();
   const name = fwModelName(id);
-  const cacheDir = sttModelCacheDir(id);
-  const poll = setInterval(() => onBytes(dirSize(cacheDir)), 600);
+  // Soma todos os diretórios do modelo: o HF grava em `blobs/` do repo real,
+  // cuja org nem sempre é a canônica.
+  const used = () => {
+    const dirs = new Set(sttModelCacheDirs(id));
+    dirs.add(sttModelCacheDir(id));
+    let total = 0;
+    for (const d of dirs) total += dirSize(d);
+    return total;
+  };
+  const poll = setInterval(() => onBytes(used()), 600);
   try {
     await new Promise<void>((resolve, reject) => {
       const p = spawn(
@@ -149,6 +239,7 @@ interface SttWorker {
 
 let worker: SttWorker | null = null;
 let starting: Promise<SttWorker> | null = null;
+let startingModel: string | null = null;
 const queue: Array<{ wav: string; language: string; resolve: (t: string) => void; reject: (e: Error) => void }> = [];
 
 function threads(): number {
@@ -249,13 +340,27 @@ async function ensureWorker(model: string): Promise<void> {
     try { worker.proc.kill(); } catch { /* ignore */ }
     worker = null;
     starting = null;
+    startingModel = null;
   }
-  if (!starting) starting = spawnWorker(model); // spawnWorker já atribui `worker`
+  // Um load em andamento só serve se for do MESMO modelo. Sem esse cuidado, o
+  // load de um modelo antigo (cujo processo já morreu) era reaproveitado e a
+  // troca de modelo falhava com "o worker de STT não iniciou".
+  if (starting && startingModel !== model) {
+    starting = null;
+    startingModel = null;
+  }
+  if (!starting) {
+    startingModel = model;
+    starting = spawnWorker(model); // spawnWorker já atribui `worker`
+  }
   const s = starting;
   try {
     await s; // resolve quando o worker fica pronto
   } finally {
-    if (starting === s) starting = null;
+    if (starting === s) {
+      starting = null;
+      startingModel = null;
+    }
   }
 }
 
@@ -333,6 +438,8 @@ export function stopWhisper(): void {
 /** Encerra de vez o worker de STT (ao fechar o app). */
 export function shutdownWhisper(): void {
   stopWhisper();
+  starting = null;
+  startingModel = null;
   if (worker) {
     try { worker.proc.kill(); } catch { /* ignore */ }
     worker = null;

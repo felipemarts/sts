@@ -4,11 +4,9 @@ import fs from 'node:fs';
 import started from 'electron-squirrel-startup';
 import { registerIpc } from './backend/ipc';
 import { shutdownWhisper } from './backend/engines/whisper';
-import { stopWorker } from './backend/engines/voiceClone';
 
 function stopEngines() {
   shutdownWhisper();
-  stopWorker();
 }
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.

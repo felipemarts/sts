@@ -14,18 +14,24 @@ const DEFAULTS: Settings = {
   ttsVolume: 1.0,
   vadThreshold: 0.015,
   vadHangoverMs: 700,
-  cloneLanguage: 'pt',
-  cloneRefPath: null,
-  clonePoolSize: 1,
 };
 
 let cache: Settings | null = null;
+
+/** Mantém só as chaves conhecidas (descarta settings de features removidas). */
+function prune(raw: Record<string, unknown>): Settings {
+  const out = { ...DEFAULTS } as Record<string, unknown>;
+  for (const k of Object.keys(DEFAULTS)) {
+    if (raw[k] !== undefined) out[k] = raw[k];
+  }
+  return out as unknown as Settings;
+}
 
 export function getSettings(): Settings {
   if (cache) return cache;
   try {
     const raw = fs.readFileSync(settingsFile(), 'utf8');
-    cache = { ...DEFAULTS, ...JSON.parse(raw) };
+    cache = prune(JSON.parse(raw));
   } catch {
     cache = { ...DEFAULTS };
   }
