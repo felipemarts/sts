@@ -7,8 +7,9 @@
  * internet). O áudio do microfone nunca é enviado — só o TEXTO a ser lido.
  */
 import WebSocket from 'ws';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { EdgeVoice } from '../../shared/types';
+import { secMsGecV2 } from './edgeDrm';
 
 const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
 const WSS_URL =
@@ -16,12 +17,15 @@ const WSS_URL =
 const VOICES_URL =
   'https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list';
 const OUTPUT_FORMAT = 'audio-24khz-96kbitrate-mono-mp3';
-// O serviço rejeita versões antigas (403) — manter razoavelmente atual.
-const SEC_MS_GEC_VERSION = '1-138.0.3351.65';
+// O serviço rejeita versões antigas (403) — manter em sincronia com
+// `edge_tts/constants.py`. O prefixo "2-" indica o token v2 (ver edgeDrm.ts).
+const CHROMIUM_FULL_VERSION = '143.0.3650.75';
+const CHROMIUM_MAJOR = CHROMIUM_FULL_VERSION.split('.')[0];
+const SEC_MS_GEC_VERSION = `2-${CHROMIUM_FULL_VERSION}`;
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ' +
-  'Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0';
+  `Chrome/${CHROMIUM_MAJOR}.0.0.0 Safari/537.36 Edg/${CHROMIUM_MAJOR}.0.0.0`;
 
 /** Idiomas expostos na UI (mesmos da aba Escutar). */
 const SUPPORTED_LOCALES = ['pt-BR', 'pt-PT', 'en-US', 'en-GB', 'es-ES', 'fr-FR', 'de-DE', 'it-IT'];
@@ -40,18 +44,9 @@ const FALLBACK_VOICES: EdgeVoice[] = [
   { shortName: 'it-IT-ElsaNeural', locale: 'it-IT', gender: 'Female', friendlyName: 'Elsa — Italiano (IT, feminina)' },
 ];
 
-/**
- * Token anti-abuso exigido pelo endpoint: SHA-256 de (ticks Windows arredondados
- * a 5 min + trusted token), em hex maiúsculo.
- */
+/** Token anti-abuso exigido pelo endpoint (ticks Windows arredondados a 5 min). */
 function secMsGec(): string {
-  let ticks = BigInt(Math.floor(Date.now() / 1000)) + 11644473600n;
-  ticks -= ticks % 300n;
-  ticks *= 10_000_000n;
-  return createHash('sha256')
-    .update(`${ticks}${TRUSTED_CLIENT_TOKEN}`)
-    .digest('hex')
-    .toUpperCase();
+  return secMsGecV2(TRUSTED_CLIENT_TOKEN);
 }
 
 function escapeXml(s: string): string {
@@ -92,7 +87,12 @@ export function synthEdge(text: string, opts: EdgeSynthOptions): Promise<Buffer>
     const ws = new WebSocket(url, {
       headers: {
         'User-Agent': UA,
+        'Accept-Encoding': 'gzip, deflate, br, zstd',
+        'Accept-Language': 'en-US,en;q=0.9',
+        Pragma: 'no-cache',
+        'Cache-Control': 'no-cache',
         Origin: 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
+        Cookie: `muid=${randomBytes(16).toString('hex').toUpperCase()};`,
       },
     });
 
